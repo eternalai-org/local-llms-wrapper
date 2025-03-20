@@ -203,11 +203,11 @@ def download_model_from_filecoin(filecoin_hash: str, output_dir: Path = DEFAULT_
                     source_text_path = source_text_path.absolute()
                     print(f"Moving model to {local_path}")
                     if source_text_path.exists():
-                        shutil.move(str(source_text_path), local_path)
                         source_projector_path = folder_path / (folder_name + "-projector")
                         source_projector_path = source_projector_path.absolute()
                         if source_projector_path.exists():
                             shutil.move(str(source_projector_path), local_path + "-projector")
+                        shutil.move(str(source_text_path), local_path)
                     else:
                         print(f"Model not found at {source_text_path}")
                         continue                  
