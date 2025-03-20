@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
-MAX_ATTEMPTS = 10
+MAX_ATTEMPTS = 3
 CHUNK_SIZE = 1024
 POSTFIX_MODEL_PATH = ".gguf"
 HTTPX_TIMEOUT = 100
@@ -199,10 +199,18 @@ def download_model_from_filecoin(filecoin_hash: str, output_dir: Path = DEFAULT_
                 except Exception as e:
                     print(f"Failed to extract files: {e}")
                 try:
-                    source_path = folder_path / folder_name
-                    source_path = source_path.absolute()
+                    source_text_path = folder_path / folder_name
+                    source_text_path = source_text_path.absolute()
                     print(f"Moving model to {local_path}")
-                    shutil.move(str(source_path), local_path)                    
+                    if source_text_path.exists():
+                        shutil.move(str(source_text_path), local_path)
+                        source_projector_path = folder_path / folder_name
+                        source_projector_path = str(source_projector_path.absolute()) + "-projector"
+                        if source_projector_path.exists():
+                            shutil.move(source_projector_path, local_path + "-projector")
+                    else:
+                        print(f"Model not found at {source_text_path}")
+                        continue                  
                     if folder_path.exists():
                         shutil.rmtree(folder_path, ignore_errors=True)
                     print(f"Model download complete: {local_path}")
@@ -219,7 +227,3 @@ def download_model_from_filecoin(filecoin_hash: str, output_dir: Path = DEFAULT_
     
     print("All download attempts failed")
     return None
-            
-
-
-            

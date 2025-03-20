@@ -38,9 +38,6 @@ class ChatCompletionResponse(BaseModel):
     choices: List[Choice]
     usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-# Replace with your OpenLLM server URL
-OPENLLM_URL = "http://localhost:3000/v1/chat/completions"
-
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(request: ChatCompletionRequest):
     # Prepare payload for OpenLLM
