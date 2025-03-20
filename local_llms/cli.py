@@ -64,7 +64,7 @@ def parse_args():
         help="Folder containing model files"
     )
     upload_command.add_argument(
-        "--task", type=str, required=True,
+        "--task", type=str, required=False,
         help = "Task for the model llms",
         choices = ["text-generation", "multimodal"]
     )   
