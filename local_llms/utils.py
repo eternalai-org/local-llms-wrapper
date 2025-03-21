@@ -63,4 +63,3 @@ def compute_file_hash(file_path: Path, hash_algo: str = "sha256") -> str:
         for chunk in iter(lambda: f.read(4096), b""):
             hash_func.update(chunk)
     return hash_func.hexdigest()
-

@@ -26,46 +26,45 @@ current_path = os.environ.get("PATH", "")
 # Create a search path with COMMAND_DIRS followed by the system's PATH
 search_path = os.pathsep.join(COMMAND_DIRS + [current_path])
 
-# Find commands with logging and error handling
-try:
-    llama_server_path = shutil.which("llama-server", path=search_path)
-    if not llama_server_path:
-        logger.error("llama-server binary not found in command directories or PATH")
-        raise RuntimeError("llama-server binary not found in command directories or PATH.")
-except Exception as e:
-    logger.error(f"Failed to find llama-server: {str(e)}", exc_info=True)
-    raise RuntimeError(f"Failed to find llama-server: {str(e)}")
+def find_and_set_command(cmd_name, env_var_name, search_path):
+    """
+    Find a command in the search path, set its environment variable, and return its path.
+    
+    Args:
+        cmd_name (str): Name of the command to find.
+        env_var_name (str): Environment variable name to set with the command path.
+        search_path (str): Path string to search for the command.
+    
+    Returns:
+        str: Path to the command if found.
+    
+    Raises:
+        RuntimeError: If the command is not found or an error occurs.
+    """
+    try:
+        cmd_path = shutil.which(cmd_name, path=search_path)
+        if not cmd_path:
+            logger.error(f"{cmd_name} command not found in command directories or PATH")
+            raise RuntimeError(f"{cmd_name} command not found in command directories or PATH")
+        logger.info(f"Found {cmd_name} at {cmd_path}")
+        os.environ[env_var_name] = cmd_path
+        return cmd_path
+    except Exception as e:
+        logger.error(f"Failed to find {cmd_name}: {str(e)}", exc_info=True)
+        raise RuntimeError(f"Failed to find {cmd_name}: {str(e)}")
 
-try:
-    tar_cmd = shutil.which("tar", path=search_path)
-    if not tar_cmd:
-        logger.error("tar command not found in command directories or PATH")
-        raise RuntimeError("tar command not found in command directories or PATH.")
-except Exception as e:
-    logger.error(f"Failed to find tar: {str(e)}", exc_info=True)
-    raise RuntimeError(f"Failed to find tar: {str(e)}")
+# Define required commands and their corresponding environment variables
+required_commands = [
+    ("llama-server", "LLAMA_SERVER"),
+    ("tar", "TAR_COMMAND"),
+    ("pigz", "PIGZ_COMMAND"),
+    ("cat", "CAT_COMMAND"),
+    ("llama-gemma3-cli", "gemma3"),
+]
 
-try:
-    pigz_cmd = shutil.which("pigz", path=search_path)
-    if not pigz_cmd:
-        logger.error("pigz command not found in command directories or PATH")
-        raise RuntimeError("pigz command not found in command directories or PATH.")
-except Exception as e:
-    logger.error(f"Failed to find pigz: {str(e)}", exc_info=True)
-    raise RuntimeError(f"Failed to find pigz: {str(e)}")
+# Find all required commands and set their environment variables
+for cmd_name, env_var_name in required_commands:
+    find_and_set_command(cmd_name, env_var_name, search_path)
 
-# New section: search for cat command
-try:
-    cat_cmd = shutil.which("cat", path=search_path)
-    if not cat_cmd:
-        logger.error("cat command not found in command directories or PATH")
-        raise RuntimeError("cat command not found in command directories or PATH.")
-except Exception as e:
-    logger.error(f"Failed to find cat: {str(e)}", exc_info=True)
-    raise RuntimeError(f"Failed to find cat: {str(e)}")
-
-# Export the found paths to the environment
-os.environ["LLAMA_SERVER_PATH"] = llama_server_path
-os.environ["TAR_COMMAND"] = tar_cmd
-os.environ["PIGZ_COMMAND"] = pigz_cmd
-os.environ["CAT_COMMAND"] = cat_cmd
+running_service_path = (Path.cwd()/ "running_service.pkl").absolute()
+os.environ["RUNNING_SERVICE_FILE"] = running_service_path

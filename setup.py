@@ -13,7 +13,9 @@ setup(
         "httpx",
         "loguru",
         "lighthouseweb3",
-        "python-dotenv"
+        "python-dotenv",
+        "fastapi",
+        "uvicorn"
     ],
     entry_points={
         "console_scripts": [

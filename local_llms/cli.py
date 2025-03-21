@@ -64,9 +64,8 @@ def parse_args():
         help="Folder containing model files"
     )
     upload_command.add_argument(
-        "--task", type=str, required=False,
-        help = "Task for the model llms",
-        choices = ["text-generation", "multimodal"]
+        "--model-family", type=str, required=False,
+        help = "Model family (e.g., GPT-3, GPT-4, etc.)"
     )   
     upload_command.add_argument(
         "--zip-chunk-size", type=int, default=512,
@@ -133,7 +132,7 @@ def handle_status(args):
 
 def handle_upload(args):
     kwargs = {
-        "task": args.task,
+        "family": args.model_family,
         "ram": args.ram,
         "hf_repo": args.hf_repo,
         "hf_file": args.hf_file,
