@@ -43,7 +43,7 @@ class LocalLLMManager:
             wait_time = min(wait_time * 2, 60)  # Exponential backoff, max 60s
         return False
 
-     def start(self, hash: str, port: int = 8080, host: str = "0.0.0.0", context_length: int = 4096) -> bool:
+    def start(self, hash: str, port: int = 8080, host: str = "0.0.0.0", context_length: int = 4096) -> bool:
         """
         Start the local LLM service in the background.
 
