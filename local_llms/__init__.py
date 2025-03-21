@@ -68,4 +68,4 @@ for cmd_name, env_var_name in required_commands:
     find_and_set_command(cmd_name, env_var_name, search_path)
 
 running_service_path = (Path.cwd()/ "running_service.pkl").absolute()
-os.environ["RUNNING_SERVICE_FILE"] = running_service_path
+os.environ["RUNNING_SERVICE_FILE"] = str(running_service_path)

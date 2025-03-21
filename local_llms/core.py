@@ -15,7 +15,7 @@ class LocalLLMManager:
     
     def __init__(self):
         """Initialize the LocalLLMManager."""       
-        self.pickle_file = os.getenv("RUNNING_SERVICE_FILE")
+        self.pickle_file = Path(os.getenv("RUNNING_SERVICE_FILE"))
 
     def _wait_for_service(self, port: int, timeout: int = 600) -> bool:
         """
