@@ -15,7 +15,7 @@ setup(
         "lighthouseweb3",
         "python-dotenv",
         "fastapi",
-        "uvicorn"
+        "uvicorn",
     ],
     entry_points={
         "console_scripts": [

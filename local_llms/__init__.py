@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 """Local LLMs - A library to manage local language models."""
-__version__ = "2.22.0"
+__version__ = "2.23.0"
 
 COMMAND_DIRS = [
     "/usr/local/bin",
@@ -47,7 +47,6 @@ def find_and_set_command(cmd_name, env_var_name, search_path):
         if not cmd_path:
             logger.error(f"{cmd_name} command not found in command directories or PATH")
             raise RuntimeError(f"{cmd_name} command not found in command directories or PATH")
-        logger.info(f"Found {cmd_name} at {cmd_path}")
         os.environ[env_var_name] = cmd_path
         return cmd_path
     except Exception as e:
@@ -61,6 +60,7 @@ required_commands = [
     ("pigz", "PIGZ_COMMAND"),
     ("cat", "CAT_COMMAND"),
     ("llama-gemma3-cli", "gemma3"),
+    ("uvicorn", "UVICORN_COMMAND"),
 ]
 
 # Find all required commands and set their environment variables

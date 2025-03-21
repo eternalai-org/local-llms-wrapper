@@ -1,4 +1,5 @@
 import os
+import uvicorn
 import shutil
 import time
 import pickle
@@ -8,6 +9,7 @@ import subprocess
 from pathlib import Path
 from loguru import logger
 from typing import Optional
+from local_llms.apis import app
 from local_llms.download import download_model_from_filecoin
 
 class LocalLLMManager:
@@ -43,7 +45,7 @@ class LocalLLMManager:
             wait_time = min(wait_time * 2, 60)  # Exponential backoff, max 60s
         return False
 
-    def start(self, hash: str, port: int = 8080, host: str = "0.0.0.0", context_length: int = 4096) -> bool:
+    def start(self, hash: str, port: int = 11434, host: str = "0.0.0.0", context_length: int = 4096) -> bool:
         """
         Start the local LLM service in the background.
 
@@ -82,21 +84,25 @@ class LocalLLMManager:
                 logger.error("llama-server executable not found in LLAMA_SERVER or PATH")
                 return False
 
-            command = [
+            llm_running_port = port + 1
+
+            running_llm_command = [
                 llama_server_path,
                 "--jinja",
-                "--model", local_model_path,
-                "--port", str(port),
+                "--model", str(local_model_path),
+                "--port", str(llm_running_port),
                 "--host", host,
                 "-c", str(context_length),
-                "--pooling", "cls"
+                "--pooling", "mean",
+                "--no-webui"
             ]
-            logger.info(f"Starting process: {' '.join(command)}")
+
+            logger.info(f"Starting process: {' '.join(running_llm_command)}")
 
             log_file_path = f"llm_service_{port}.log"
             with open(log_file_path, "w") as log_file:
-                process = subprocess.Popen(
-                    command,
+                llm_process = subprocess.Popen(
+                    running_llm_command,
                     stdout=log_file,
                     stderr=log_file,
                     preexec_fn=os.setsid
@@ -107,15 +113,49 @@ class LocalLLMManager:
                 with open(log_file_path, "r") as f:
                     last_lines = f.readlines()[-10:]
                     logger.error(f"Last 10 lines of log:\n{''.join(last_lines)}")
-                process.terminate()
+                llm_process.terminate()
+                return False
+
+            app_running_port = port
+            uvicorn_path = os.getenv("UVICORN_COMMAND") 
+            # start the FastAPI app in the background
+
+            uvicorn_command = [
+                uvicorn_path,
+                "local_llms.apis:app",
+                "--host", host,
+                "--port", str(app_running_port),
+                "--log-level", "info"
+            ]
+
+            logger.info(f"Starting process: {' '.join(uvicorn_command)}")
+            
+            # dummy dump to avoid bug
+            self._dump_running_service({})
+
+            with open("apis.log", "w") as log_file:
+                apis_process = subprocess.Popen(
+                    uvicorn_command,
+                    stdout=log_file,
+                    stderr=log_file,
+                    preexec_fn=os.setsid
+                )
+            
+            if not self._wait_for_service(app_running_port):
+                logger.error(f"API service failed to start within 1200 seconds")
+                with open("apis.log", "r") as f:
+                    last_lines = f.readlines()[-10:]
+                    logger.error(f"Last 10 lines of log:\n{''.join(last_lines)}")
+                apis_process.terminate()
                 return False
 
             logger.info(f"Service started on port {port} for model: {hash}")
 
             service_metadata = {
                 "hash": hash,
-                "port": port,
-                "pid": process.pid,
+                "port": llm_running_port,
+                "pid": llm_process.pid,
+                "app_pid": apis_process.pid,
                 "multimodal": False,
                 "local_text_path": local_model_path
             }
@@ -133,7 +173,8 @@ class LocalLLMManager:
                     except requests.exceptions.RequestException:
                         time.sleep(2)  # Delay between retries
 
-            self._dump_running_service(service_metadata)
+            self._dump_running_service(service_metadata)    
+            
             return True
 
         except Exception as e:
@@ -192,6 +233,7 @@ class LocalLLMManager:
             port = service_info.get("port")
             hash = service_info.get("hash")
             pid = service_info.get("pid")
+            app_pid = service_info.get("app_pid")
 
             logger.info(f"Stopping LLM service '{hash}' running on port {port} (PID: {pid})...")
 
@@ -204,6 +246,16 @@ class LocalLLMManager:
                 if process.is_running():  # Force kill if still alive
                     logger.warning("Process did not terminate, forcing kill.")
                     process.kill()
+
+            # Terminate FastAPI app by PID
+            if psutil.pid_exists(app_pid):
+                app_process = psutil.Process(app_pid)
+                app_process.terminate()
+                app_process.wait(timeout=5)  # Allow process to shut down gracefully
+                
+                if app_process.is_running():  # Force kill if
+                    logger.warning("API process did not terminate, forcing kill.")
+                    app_process.kill()
 
             # Remove the tracking file
             os.remove("running_service.pkl")
