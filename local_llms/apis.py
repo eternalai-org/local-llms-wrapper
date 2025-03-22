@@ -23,7 +23,7 @@ DEFAULT_EMBEDDING_MODEL = "text-embedding-ada-002"
 # -------------------------
 
 class Message(BaseModel):
-    role: str  # "system", "user", or "assistant"
+    role: str 
     content: str
 
 class ToolCall(BaseModel):
@@ -117,6 +117,7 @@ async def update(request: dict):
 async def chat_completions(request: ChatCompletionRequest):
     """Handles text-based chat completions, including streaming and tool calls."""
     request.fix_message_order()
+    print(request)
     return await generate_text_response(request)
 
 
