@@ -52,7 +52,7 @@ class ChatCompletionRequest(BaseModel):
             if last_role in {"user", "assistant"} and role == last_role:
                 # Insert opposite role with empty content
                 opposite_role = "assistant" if last_role == "user" else "user"
-                fixed_messages.append(Message(role=opposite_role, content=""))
+                fixed_messages.append(Message(role=opposite_role, content="."))
 
             fixed_messages.append(Message(role=role, content=content))
             last_role = role  # Update last_role to the current role
@@ -117,7 +117,6 @@ async def update(request: dict):
 async def chat_completions(request: ChatCompletionRequest):
     """Handles text-based chat completions, including streaming and tool calls."""
     request.fix_message_order()
-    print(request)
     return await generate_text_response(request)
 
 
