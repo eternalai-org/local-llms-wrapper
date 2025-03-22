@@ -199,32 +199,32 @@ class RequestProcessor:
         "/v1/embeddings": (EmbeddingRequest, ServiceHandler.generate_embeddings_response),
     }  # Mapping of endpoints to their request models and handlers
 
-# Global worker function
-async def worker():
-    """
-    Worker function to process requests from the queue asynchronously.
-    Currently not actively used in the provided code.
-    """
-    while True:
-        try:
-            endpoint, request_data, future = await RequestProcessor.queue.get()
-            
-            if endpoint in RequestProcessor.endpoint_handlers:
-                model_cls, handler = RequestProcessor.endpoint_handlers[endpoint]
-                try:
-                    request_obj = model_cls(**request_data)
-                    result = await handler(request_obj)
-                    future.set_result(result)
-                except Exception as e:
-                    future.set_exception(e)
-            else:
-                future.set_exception(HTTPException(status_code=404, detail="Endpoint not found"))
-            
-            RequestProcessor.queue.task_done()
-        except asyncio.CancelledError:
-            break  # Exit the loop when the task is canceled
-        except Exception as e:
-            logger.error(f"Worker error: {str(e)}")
+    # Global worker function
+    async def worker():
+        """
+        Worker function to process requests from the queue asynchronously.
+        Currently not actively used in the provided code.
+        """
+        while True:
+            try:
+                endpoint, request_data, future = await RequestProcessor.queue.get()
+                
+                if endpoint in RequestProcessor.endpoint_handlers:
+                    model_cls, handler = RequestProcessor.endpoint_handlers[endpoint]
+                    try:
+                        request_obj = model_cls(**request_data)
+                        result = await handler(request_obj)
+                        future.set_result(result)
+                    except Exception as e:
+                        future.set_exception(e)
+                else:
+                    future.set_exception(HTTPException(status_code=404, detail="Endpoint not found"))
+                
+                RequestProcessor.queue.task_done()
+            except asyncio.CancelledError:
+                break  # Exit the loop when the task is canceled
+            except Exception as e:
+                logger.error(f"Worker error: {str(e)}")
 
 # Lifecycle Events
 @app.on_event("startup")
