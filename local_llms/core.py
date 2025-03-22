@@ -151,7 +151,9 @@ class LocalLLMManager:
                 "pid": llm_process.pid,
                 "app_pid": apis_process.pid,
                 "multimodal": False,
-                "local_text_path": local_model_path
+                "local_text_path": local_model_path,
+                "app_port": port,
+                "context_length": context_length
             }
             projector_path = f"{local_model_path}-projector"
             if os.path.exists(projector_path):
@@ -233,12 +235,12 @@ class LocalLLMManager:
             with open("running_service.pkl", "rb") as f:
                 service_info = pickle.load(f)
             
-            port = service_info.get("port")
             hash = service_info.get("hash")
             pid = service_info.get("pid")
             app_pid = service_info.get("app_pid")
+            app_port = service_info.get("app_port")
 
-            logger.info(f"Stopping LLM service '{hash}' running on port {port} (PID: {pid})...")
+            logger.info(f"Stopping LLM service '{hash}' running on port {app_port} (PID: {app_pid})...")
 
             # Terminate process by PID
             if psutil.pid_exists(pid):
