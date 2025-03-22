@@ -97,13 +97,14 @@ class LocalLLMManager:
             logger.info(f"Starting process: {' '.join(running_llm_command)}")
 
             log_file_path = f"llm_service_{port}.log"
-            with open(log_file_path, "w") as log_file:
+            try:
                 llm_process = subprocess.Popen(
                     running_llm_command,
-                    stdout=log_file,
-                    stderr=log_file,
                     preexec_fn=os.setsid
                 )
+            except Exception as e:
+                logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
+                return False
 
             if not self._wait_for_service(port):
                 logger.error(f"Service failed to start within 600 seconds")
@@ -126,23 +127,23 @@ class LocalLLMManager:
             ]
 
             logger.info(f"Starting process: {' '.join(uvicorn_command)}")
-            
-            # dummy dump to avoid bug
-            self._dump_running_service({})
 
-            with open("apis.log", "w") as log_file:
+            try:
                 apis_process = subprocess.Popen(
                     uvicorn_command,
-                    stdout=log_file,
-                    stderr=log_file,
                     preexec_fn=os.setsid
                 )
+            except Exception as e:
+                logger.error(f"Error starting FastAPI app: {str(e)}", exc_info=True)
+                llm_process.terminate()
+                return False
             
             if not self._wait_for_service(app_running_port):
-                logger.error(f"API service failed to start within 1200 seconds")
+                logger.error(f"API service failed to start within 600 seconds")
                 with open("apis.log", "r") as f:
                     last_lines = f.readlines()[-10:]
                     logger.error(f"Last 10 lines of log:\n{''.join(last_lines)}")
+                llm_process.terminate()
                 apis_process.terminate()
                 return False
 
