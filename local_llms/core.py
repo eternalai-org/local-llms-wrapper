@@ -90,31 +90,28 @@ class LocalLLMManager:
                 "--port", str(llm_running_port),
                 "--host", host,
                 "-c", str(context_length),
-                "--pooling", "mean",
+                "--pooling", "cls",
                 "--no-webui"
             ]
 
             logger.info(f"Starting process: {' '.join(running_llm_command)}")
 
-            log_file_path = f"llm_service_{port}.log"
             try:
                 llm_process = subprocess.Popen(
                     running_llm_command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, 
                     preexec_fn=os.setsid
                 )
             except Exception as e:
                 logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
                 return False
 
-            if not self._wait_for_service(port):
+            if not self._wait_for_service(llm_running_port):
                 logger.error(f"Service failed to start within 600 seconds")
-                with open(log_file_path, "r") as f:
-                    last_lines = f.readlines()[-10:]
-                    logger.error(f"Last 10 lines of log:\n{''.join(last_lines)}")
                 llm_process.terminate()
                 return False
 
-            app_running_port = port
             uvicorn_path = os.getenv("UVICORN_COMMAND") 
             # start the FastAPI app in the background
 
@@ -122,7 +119,7 @@ class LocalLLMManager:
                 uvicorn_path,
                 "local_llms.apis:app",
                 "--host", host,
-                "--port", str(app_running_port),
+                "--port", str(port),
                 "--log-level", "info"
             ]
 
@@ -131,6 +128,8 @@ class LocalLLMManager:
             try:
                 apis_process = subprocess.Popen(
                     uvicorn_command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, 
                     preexec_fn=os.setsid
                 )
             except Exception as e:
@@ -138,11 +137,8 @@ class LocalLLMManager:
                 llm_process.terminate()
                 return False
             
-            if not self._wait_for_service(app_running_port):
+            if not self._wait_for_service(port):
                 logger.error(f"API service failed to start within 600 seconds")
-                with open("apis.log", "r") as f:
-                    last_lines = f.readlines()[-10:]
-                    logger.error(f"Last 10 lines of log:\n{''.join(last_lines)}")
                 llm_process.terminate()
                 apis_process.terminate()
                 return False
@@ -175,7 +171,7 @@ class LocalLLMManager:
 
             # update service metadata to the FastAPI app
             try:
-                update_url = f"http://localhost:{app_running_port}/v1/update"
+                update_url = f"http://localhost:{port}/v1/update"
                 response = requests.post(update_url, json=service_metadata, timeout=10)
                 response.raise_for_status()  # Raise exception for HTTP error responses
             except requests.exceptions.RequestException as e:
