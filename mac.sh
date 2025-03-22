@@ -55,19 +55,19 @@ if command_exists python3; then
     
     log_message "Found system Python version: $PYTHON_VERSION"
     
-    # Check if version is >= 3.11
+    # Check if version is >= 3.9
     if [ "$PYTHON_MAJOR" -gt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 11 ]; }; then
-        log_message "System Python is >= 3.11. Using existing Python."
+        log_message "System Python is >= 3.9. Using existing Python."
         PYTHON_CMD="python3"  # Use system Python
     else
-        log_message "System Python is < 3.11. Checking Homebrew Python..."
+        log_message "System Python is < 3.9. Checking Homebrew Python..."
     fi
 fi
 
 # If no suitable system Python, install or verify Homebrew Python
 if [ "$PYTHON_CMD" = "$BREW_PREFIX/bin/python3" ]; then
     if ! "$PYTHON_CMD" --version &>/dev/null; then
-        log_message "Installing Python via Homebrew (requires >= 3.11)..."
+        log_message "Installing Python via Homebrew (requires >= 3.9)..."
         brew install python || handle_error $? "Failed to install Python"
     fi
     log_message "Verifying Homebrew Python version..."
@@ -104,15 +104,7 @@ else
     log_message "pigz installed successfully."
 fi
 
-# Step 5: Create and activate virtual environment
-log_message "Creating virtual environment 'local_llms'..."
-"$PYTHON_CMD" -m venv local_llms || handle_error $? "Failed to create virtual environment"
-
-log_message "Activating virtual environment..."
-source local_llms/bin/activate || handle_error $? "Failed to activate virtual environment"
-log_message "Virtual environment activated."
-
-# Step 6: Install llama.cpp
+# Step 5: Install llama.cpp
 log_message "Checking for llama.cpp installation..."
 if command_exists llama; then
     log_message "llama.cpp is installed. Checking for updates..."
@@ -134,15 +126,26 @@ hash -r
 llama-cli --version || handle_error $? "llama.cpp verification failed"
 log_message "llama.cpp setup complete."
 
+
+# Step 6: Create and activate virtual environment
+log_message "Creating virtual environment 'local_llms'..."
+"$PYTHON_CMD" -m venv local_llms || handle_error $? "Failed to create virtual environment"
+
+log_message "Activating virtual environment..."
+source local_llms/bin/activate || handle_error $? "Failed to activate virtual environment"
+log_message "Virtual environment activated."
+
+
 # Step 7: Install local-llms toolkit
 log_message "Setting up local-llms toolkit..."
 if pip show local-llms &>/dev/null; then
     log_message "local-llms is installed. Updating..."
-    pip install --upgrade git+https://github.com/eternalai-org/local-llms.git || handle_error $? "Failed to update local-llms toolkit"
+    pip uninstall local-llms -y || handle_error $? "Failed to uninstall local-llms"
+    pip install -q git+https://github.com/eternalai-org/local-llms.git || handle_error $? "Failed to update local-llms toolkit"
     log_message "local-llms toolkit updated."
 else
     log_message "Installing local-llms toolkit..."
-    pip install git+https://github.com/eternalai-org/local-llms.git || handle_error $? "Failed to install local-llms toolkit"
+    pip install -q git+https://github.com/eternalai-org/local-llms.git || handle_error $? "Failed to install local-llms toolkit"
     log_message "local-llms toolkit installed."
 fi
 

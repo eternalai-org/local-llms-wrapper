@@ -1,12 +1,13 @@
-import os
-import json
-import pickle
-import tempfile
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
+import httpx
 import asyncio
+from fastapi.responses import JSONResponse
+import uuid
+from typing import AsyncGenerator
 
 app = FastAPI()
 
@@ -20,97 +21,6 @@ DEFAULT_EMBEDDING_MODEL = "text-embedding-ada-002"
 # -------------------------
 # 🚀 Define Request Schemas
 # -------------------------
-
-# Load service info at startup
-@app.on_event("startup")
-async def startup_event():
-    running_service_file = os.getenv("RUNNING_SERVICE_FILE")
-    if not running_service_file:
-        raise Exception("Environment variable RUNNING_SERVICE_FILE not set")
-    try:
-        with open(running_service_file, "rb") as f:
-            app.state.service_info = pickle.load(f)
-    except Exception as e:
-        raise Exception(f"Failed to load service info: {str(e)}")
-
-# # Asynchronous image download function
-# async def download_image(url: str, path: str):
-#     try:
-#         async with aiohttp.ClientSession() as session:
-#             async with session.get(url) as response:
-#                 if response.status == 200:
-#                     async with aiofiles.open(path, 'wb') as f:
-#                         await f.write(await response.read())
-#                 else:
-#                     raise HTTPException(status_code=400, detail=f"Failed to download image: HTTP {response.status}")
-#     except aiohttp.ClientError as e:
-#         raise HTTPException(status_code=400, detail=f"Failed to download image: {str(e)}")
-
-# @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
-# async def chat_completions(request: ChatCompletionRequest):
-#     service_info = app.state.service_info
-    
-
-#     multimodal = service_info.get("multimodal", False)
-#     if not multimodal:
-#         raise HTTPException(status_code=400, detail="Only support multimodal for this API endpoint")
-
-#     if len(request.messages) > 1:
-#         raise HTTPException(status_code=400, detail="Only support single message for now")
-
-#     family = service_info["family"]
-#     local_text_path = service_info["local_text_path"]
-#     local_projector_path = service_info["local_projector_path"]
-
-#     # Create temporary file for image
-#     temp_file = tempfile.NamedTemporaryFile(delete=False)
-#     local_image_path = temp_file.name
-#     prompt = ""
-
-#     # Process message content
-#     for message_content in request.messages[0].content:
-#         if message_content.type == "text":
-#             prompt = message_content.text
-#         elif message_content.type == "image_url":
-#             url = message_content.image_url["url"]
-#             await download_image(url, local_image_path)
-
-#     cli = os.getenv(family)
-#     if not cli:
-#         raise HTTPException(status_code=503, detail=f"CLI for family '{family}' not found in environment variables")
-
-#     if not request.stream:
-#         # Handle non-streaming case (unimplemented as in original)
-#         pass
-#     else:
-#         async def stream_output():
-#             try:
-#                 start_return = False
-#                 cmd = [
-#                     cli, "--model", local_text_path, "--mmproj", local_projector_path,
-#                     "--image", local_image_path, "-p", prompt
-#                 ]
-#                 print(f"Running command: {' '.join(cmd)}")
-#                 proc = await asyncio.create_subprocess_exec(
-#                     *cmd,
-#                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-#                 )
-#                 while True:
-#                     line = await proc.stdout.readline()
-#                     if not line:
-#                         break
-#                     output = line.decode("utf-8").strip()
-#                     if "Image decoded in" in output:
-#                         start_return = True
-#                     if start_return:
-#                         yield f"data: {json.dumps({'choices': [{'delta': {'content': output}}]})}\n\n"
-#                 yield "data: [DONE]\n\n"
-#                 await proc.wait()
-#             finally:
-#                 # Ensure temporary file is deleted
-#                 os.remove(local_image_path)
-
-#         return StreamingResponse(stream_output(), media_type="text/event-stream")
 
 class Message(BaseModel):
     role: str  # "system", "user", or "assistant"
@@ -158,9 +68,6 @@ class EmbeddingRequest(BaseModel):
     model: str = DEFAULT_EMBEDDING_MODEL
     input: List[str] = Field(..., description="List of text inputs for embedding")
 
-# --------------------------------------
-# 🚀 Dummy Function to Simulate Response
-# --------------------------------------
 
 async def generate_text_response(request: ChatCompletionRequest):
     """Simulates a text model response (replace with real model call)."""
@@ -171,7 +78,7 @@ async def generate_text_response(request: ChatCompletionRequest):
     if request.stream:
         async def stream_generator():
             async with httpx.AsyncClient() as client:
-               async with client.stream("POST", "http://localhost:11535/v1/chat/completions", json=request.dict()) as response:
+               async with client.stream("POST", f"http://localhost:{port}/v1/chat/completions", json=request.dict()) as response:
                     async for line in response.aiter_lines():
                         if line:
                             yield f"data: {line}\n\n"
@@ -182,7 +89,7 @@ async def generate_text_response(request: ChatCompletionRequest):
 
 async def generate_vision_response(messages: List[Message], stream: bool):
     """Simulates a vision model response."""
-
+    response_text = "dummy result"
     if stream:
         async def stream_generator() -> AsyncGenerator[str, None]:
             for word in response_text.split():
@@ -199,6 +106,11 @@ async def generate_vision_response(messages: List[Message], stream: bool):
 
 @app.get("/health")
 async def health():
+    return {"status": "ok"}
+
+@app.post("/v1/update")
+async def update(request: dict):
+    app.state.service_info = request
     return {"status": "ok"}
 
 @app.post("/v1/chat/completions")

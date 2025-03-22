@@ -1,6 +1,4 @@
 import os
-import uvicorn
-import shutil
 import time
 import pickle
 import psutil
@@ -9,7 +7,6 @@ import subprocess
 from pathlib import Path
 from loguru import logger
 from typing import Optional
-from local_llms.apis import app
 from local_llms.download import download_model_from_filecoin
 
 class LocalLLMManager:
@@ -109,7 +106,7 @@ class LocalLLMManager:
                 )
 
             if not self._wait_for_service(port):
-                logger.error(f"Service failed to start within 1200 seconds")
+                logger.error(f"Service failed to start within 600 seconds")
                 with open(log_file_path, "r") as f:
                     last_lines = f.readlines()[-10:]
                     logger.error(f"Last 10 lines of log:\n{''.join(last_lines)}")
@@ -174,13 +171,22 @@ class LocalLLMManager:
                         time.sleep(2)  # Delay between retries
 
             self._dump_running_service(service_metadata)    
+
+            # update service metadata to the FastAPI app
+            try:
+                update_url = f"http://localhost:{app_running_port}/v1/update"
+                response = requests.post(update_url, json=service_metadata, timeout=10)
+                response.raise_for_status()  # Raise exception for HTTP error responses
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Failed to update service metadata: {str(e)}")
+                # Stop the partially started service
+                self.stop()
+                return False
             
             return True
 
         except Exception as e:
             logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
-            if "process" in locals():
-                process.terminate()
             return False
         
     def _dump_running_service(self, metadata: dict):
