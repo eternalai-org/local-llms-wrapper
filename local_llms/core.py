@@ -96,13 +96,20 @@ class LocalLLMManager:
 
             logger.info(f"Starting process: {' '.join(running_llm_command)}")
 
+            # Create log files for stdout and stderr for LLM process
+            os.makedirs("logs", exist_ok=True)
+            llm_log_stdout = Path(f"logs/llm_stdout_{llm_running_port}.log")
+            llm_log_stderr = Path(f"logs/llm_stderr_{llm_running_port}.log")
+            
             try:
-                llm_process = subprocess.Popen(
-                    running_llm_command,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, 
-                    preexec_fn=os.setsid
-                )
+                with open(llm_log_stdout, 'w') as stdout_log, open(llm_log_stderr, 'w') as stderr_log:
+                    llm_process = subprocess.Popen(
+                        running_llm_command,
+                        stdout=stdout_log,
+                        stderr=stderr_log,
+                        preexec_fn=os.setsid
+                    )
+                logger.info(f"LLM logs written to {llm_log_stdout} and {llm_log_stderr}")
             except Exception as e:
                 logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
                 return False
@@ -125,13 +132,20 @@ class LocalLLMManager:
 
             logger.info(f"Starting process: {' '.join(uvicorn_command)}")
 
+            # Create log files for stdout and stderr
+            os.makedirs("logs", exist_ok=True)
+            log_path_stdout = Path(f"logs/api_stdout_{port}.log")
+            log_path_stderr = Path(f"logs/api_stderr_{port}.log")
+            
             try:
-                apis_process = subprocess.Popen(
-                    uvicorn_command,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, 
-                    preexec_fn=os.setsid
-                )
+                with open(log_path_stdout, 'w') as stdout_log, open(log_path_stderr, 'w') as stderr_log:
+                    apis_process = subprocess.Popen(
+                        uvicorn_command,
+                        stdout=stdout_log,
+                        stderr=stderr_log,
+                        preexec_fn=os.setsid
+                    )
+                logger.info(f"API logs written to {log_path_stdout} and {log_path_stderr}")
             except Exception as e:
                 logger.error(f"Error starting FastAPI app: {str(e)}", exc_info=True)
                 llm_process.terminate()
