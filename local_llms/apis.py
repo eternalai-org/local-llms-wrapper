@@ -198,8 +198,9 @@ class RequestProcessor:
         "/v1/chat/completions": (ChatCompletionRequest, ServiceHandler.generate_text_response),
         "/v1/embeddings": (EmbeddingRequest, ServiceHandler.generate_embeddings_response),
     }  # Mapping of endpoints to their request models and handlers
-
+    
     # Global worker function
+    @staticmethod
     async def worker():
         """
         Worker function to process requests from the queue asynchronously.
