@@ -82,15 +82,24 @@ class ChatCompletionRequest(BaseModel):
         """
         if not self.messages:
             return
+            
         fixed_messages = []
         last_role = None
+        
         for msg in self.messages:
             role = msg.role.strip()
-            if last_role in {"user", "assistant"} and role == last_role:
-                opposite_role = "assistant" if last_role == "user" else "user"
-                fixed_messages.append(Message(role=opposite_role, content=" "))
+            content = msg.content or " "
+            
+            # Insert opposite role if needed
+            if (last_role in ("user", "assistant")) and role == last_role:
+                fixed_messages.append(Message(
+                    role="assistant" if last_role == "user" else "user",
+                    content=" "
+                ))
+            
             fixed_messages.append(Message(role=role, content=content))
             last_role = role
+            
         self.messages = fixed_messages
 
 class EmbeddingRequest(BaseModel):
