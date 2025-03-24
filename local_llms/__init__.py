@@ -60,7 +60,6 @@ required_commands = [
     ("pigz", "PIGZ_COMMAND"),
     ("cat", "CAT_COMMAND"),
     ("llama-gemma3-cli", "gemma3"),
-    ("uvicorn", "UVICORN_COMMAND"),
 ]
 
 # Find all required commands and set their environment variables

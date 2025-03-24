@@ -119,11 +119,10 @@ class LocalLLMManager:
                 llm_process.terminate()
                 return False
 
-            uvicorn_path = os.getenv("UVICORN_COMMAND") 
             # start the FastAPI app in the background
 
             uvicorn_command = [
-                uvicorn_path,
+                "uvicorn",
                 "local_llms.apis:app",
                 "--host", host,
                 "--port", str(port),
