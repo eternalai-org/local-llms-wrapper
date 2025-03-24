@@ -10,7 +10,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, validator
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Any
 
 # Configuration
 class Config:
@@ -50,7 +50,7 @@ class ChatCompletionRequest(BaseModel):
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
     messages: List[Message]                 # List of messages in the chat
     stream: Optional[bool] = False          # Whether to stream the response
-    tools: any # Optional list of tools to use
+    tools: Optional[Any] = None # Optional list of tools to use
 
     @validator("messages")
     def check_messages_not_empty(cls, v):
