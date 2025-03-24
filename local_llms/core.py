@@ -41,6 +41,38 @@ class LocalLLMManager:
             time.sleep(wait_time)
             wait_time = min(wait_time * 2, 60)  # Exponential backoff, max 60s
         return False
+    
+    def restart(self):
+        """
+        Restart the currently running LLM service.
+
+        Returns:
+            bool: True if the service restarted successfully, False otherwise.
+        """
+        if not self.pickle_file.exists():
+            logger.warning("No running LLM service to restart.")
+            return False
+        
+        try:
+            # Load service details from the pickle file
+            with open(self.pickle_file, "rb") as f:
+                service_info = pickle.load(f)
+            
+            hash = service_info.get("hash")
+            port = service_info.get("app_port")
+            llm_port = service_info.get("port")
+            context_length = service_info.get("context_length")
+
+            logger.info(f"Restarting LLM service '{hash}' running on port {port}...")
+
+            # Stop the current service
+            self.stop()
+
+            # Start the service with the same parameters
+            return self.start(hash, port, context_length=context_length)
+        except Exception as e:
+            logger.error(f"Error restarting LLM service: {str(e)}", exc_info=True)
+            return False
 
     def start(self, hash: str, port: int = 11434, host: str = "0.0.0.0", context_length: int = 4096) -> bool:
         """
@@ -218,18 +250,39 @@ class LocalLLMManager:
             return None
 
         try:
-            with self.pickle_file.open("rb") as f:
+            # Load service info from pickle file
+            with open(self.pickle_file, "rb") as f:
                 service_info = pickle.load(f)
-            service_port = service_info.get("port")
-            response = requests.get(f"http://localhost:{service_port}/health", timeout=2)
-            if response.status_code == 200 and response.json().get("status") == "ok":
-                return service_info.get("hash")
-        except (requests.exceptions.RequestException, OSError, pickle.UnpicklingError):
-            pass
+            
+            app_port = service_info.get("app_port")
+            port = service_info.get("port")
+            hash_value = service_info.get("hash")
 
-        # Clean up if the health check fails or an error occurs
-        if self.pickle_file.exists():
-            self.pickle_file.unlink()
+            # Quick health check with minimum timeout
+            try:
+                # Check LLM service health
+                llm_url = f"http://localhost:{port}/health"
+                llm_healthy = requests.get(llm_url, timeout=2).status_code == 200
+                
+                # Check API service health
+                api_url = f"http://localhost:{app_port}/health"
+                api_healthy = requests.get(api_url, timeout=2).status_code == 200
+                
+                if llm_healthy and api_healthy:
+                    return hash_value
+                
+                # If either service is unhealthy, stop both and clean up
+                logger.warning(f"Service unhealthy: LLM={llm_healthy}, API={api_healthy}")
+                self.stop()
+            except requests.exceptions.RequestException:
+                logger.warning(f"Failed to connect to service at ports {port}/{app_port}")
+                self.stop()
+                
+        except Exception as e:
+            logger.error(f"Error getting running model: {str(e)}")
+            if self.pickle_file.exists():
+                self.pickle_file.unlink()
+                
         return None
 
     def stop(self) -> bool:
