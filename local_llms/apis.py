@@ -50,7 +50,7 @@ class ChatCompletionRequest(BaseModel):
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
     messages: List[Message]                 # List of messages in the chat
     stream: Optional[bool] = False          # Whether to stream the response
-    tools: Optional[List[ToolCall]] = None  # Optional list of tools to use
+    tools: any # Optional list of tools to use
 
     @validator("messages")
     def check_messages_not_empty(cls, v):
@@ -242,6 +242,7 @@ class ServiceHandler:
         """
         port = await ServiceHandler.get_service_port()
         return await ServiceHandler._make_api_call(port, "/v1/embeddings", request.dict())
+        
     
     @staticmethod
     async def _make_api_call(port: int, endpoint: str, data: dict) -> dict:
