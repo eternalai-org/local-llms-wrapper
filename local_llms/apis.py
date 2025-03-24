@@ -88,7 +88,7 @@ class ChatCompletionRequest(BaseModel):
             content = msg.content.strip()
             if last_role in {"user", "assistant"} and role == last_role:
                 opposite_role = "assistant" if last_role == "user" else "user"
-                fixed_messages.append(Message(role=opposite_role, content="."))
+                fixed_messages.append(Message(role=opposite_role, content=" "))
             fixed_messages.append(Message(role=role, content=content))
             last_role = role
         self.messages = fixed_messages
