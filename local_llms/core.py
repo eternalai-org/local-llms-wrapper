@@ -271,19 +271,14 @@ class LocalLLMManager:
                 if llm_healthy and api_healthy:
                     return hash_value
                 
-                # If either service is unhealthy, stop both and clean up
-                logger.warning(f"Service unhealthy: LLM={llm_healthy}, API={api_healthy}")
-                self.stop()
+                self.restart()
+                return hash_value
             except requests.exceptions.RequestException:
-                logger.warning(f"Failed to connect to service at ports {port}/{app_port}")
-                self.stop()
-                
+                return None
+
         except Exception as e:
-            logger.error(f"Error getting running model: {str(e)}")
-            if self.pickle_file.exists():
-                self.pickle_file.unlink()
-                
-        return None
+            logger.error(f"Error getting running model: {str(e)}", exc_info=True)
+            return None
 
     def stop(self) -> bool:
         """
