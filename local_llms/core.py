@@ -258,27 +258,37 @@ class LocalLLMManager:
             app_port = service_info.get("app_port")
             llm_port = service_info.get("port")
             context_length = service_info.get("context_length")
+            
+            # Check both services with minimal timeout
+            llm_healthy = False
+            api_healthy = False
+            
+            # Use a single session for connection pooling
+            with requests.Session() as session:
+                try:
+                    llm_status = session.get(f"http://localhost:{llm_port}/health", timeout=2)
+                    llm_healthy = llm_status.status_code == 200
+                except requests.exceptions.RequestException:
+                    pass
+            
+                try:
+                    app_status = session.get(f"http://localhost:{app_port}/v1/health", timeout=2)
+                    api_healthy = app_status.status_code == 200
+                except requests.exceptions.RequestException:
+                    pass
 
-            # Perform health checks with minimal timeout
+            if llm_healthy and api_healthy:
+                return model_hash
+                
+            logger.warning(f"Service not healthy: LLM {llm_healthy}, API {api_healthy}")
+            self.stop()  
             try:
-                # Check both services in a more efficient way
-                llm_healthy = requests.get(f"http://localhost:{llm_port}/health", timeout=1).status_code == 200
-                api_healthy = requests.get(f"http://localhost:{app_port}/v1/health", timeout=1).status_code == 200
-                
-                if llm_healthy and api_healthy:
-                    return model_hash
-                
-                logger.warning(f"Service not healthy: LLM {llm_healthy}, API {api_healthy}")
-                
-                # Attempt to restart the service
-                logger.info(f"Attempting to restart service for model '{model_hash}'...")
-                self.stop()
-                logger.info(f"Restarting service for model '{model_hash}' on port {app_port}")
+                logger.info("Restarting service...")  
                 if self.start(model_hash, app_port, context_length=context_length):
                     return model_hash
                 return None
-                
-            except requests.exceptions.RequestException:
+            except Exception as e:
+                logger.error(f"Failed to restart service: {str(e)}")
                 return None
 
         except Exception as e:
