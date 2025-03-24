@@ -101,6 +101,9 @@ def parse_args():
     status_command = subparsers.add_parser(
        "status", help="Check the running model"
     )
+    restart_command = subparsers.add_parser(
+        "restart", help="Restart the local language model server"
+    )
     return parser.parse_known_args()
 
 def version_command():
@@ -139,6 +142,10 @@ def handle_upload(args):
     }
     upload_folder_to_lighthouse(args.folder_name, args.zip_chunk_size, args.max_retries, args.threads, **kwargs)
 
+def handle_restart(args):
+    if not manager.restart():
+        sys.exit(1)
+
 def main():
     known_args, unknown_args = parse_args()
     for arg in unknown_args:
@@ -159,6 +166,8 @@ def main():
         handle_status(known_args)
     elif known_args.command == "upload":
         handle_upload(known_args)
+    elif known_args.command == "restart":
+        handle_restart(known_args)
     else:
         logger.error(f"Unknown command: {known_args.command}")
         sys.exit(2)
