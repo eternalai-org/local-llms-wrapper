@@ -271,7 +271,9 @@ class LocalLLMManager:
                 logger.warning(f"Service not healthy: LLM {llm_healthy}, API {api_healthy}")
                 
                 # Attempt to restart the service
+                logger.info(f"Attempting to restart service for model '{model_hash}'...")
                 self.stop()
+                logger.info(f"Restarting service for model '{model_hash}' on port {app_port}")
                 if self.start(model_hash, app_port, context_length=context_length):
                     return model_hash
                 return None
