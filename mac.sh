@@ -141,11 +141,11 @@ log_message "Setting up local-llms toolkit..."
 if pip show local-llms &>/dev/null; then
     log_message "local-llms is installed. Updating..."
     pip uninstall local-llms -y || handle_error $? "Failed to uninstall local-llms"
-    pip install -q git+https://github.com/eternalai-org/local-llms.git || handle_error $? "Failed to update local-llms toolkit"
+    pip install -q git+https://github.com/eternalai-org/local-llms-wrapper.git || handle_error $? "Failed to update local-llms toolkit"
     log_message "local-llms toolkit updated."
 else
     log_message "Installing local-llms toolkit..."
-    pip install -q git+https://github.com/eternalai-org/local-llms.git || handle_error $? "Failed to install local-llms toolkit"
+    pip install -q git+https://github.com/eternalai-org/local-llms-wrapper.git || handle_error $? "Failed to install local-llms toolkit"
     log_message "local-llms toolkit installed."
 fi
 
