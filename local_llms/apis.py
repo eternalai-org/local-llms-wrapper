@@ -146,11 +146,14 @@ class ServiceHandler:
         Make a non-streaming API call to the specified endpoint and return the JSON response.
         """
         try:
+            logger.info(f"Making API call to endpoint: {endpoint}")
             response = await app.state.client.post(
                 f"http://localhost:{port}{endpoint}", 
-                json=data
+                json=data,
+                timeout=None  # Wait indefinitely for a response
             )
             logger.info(f"Received response with status code: {response.status_code}")
+
             
             if response.status_code != 200:
                 logger.error(f"Error: {response.status_code} - {response.text}")
