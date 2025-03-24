@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 """Local LLMs - A library to manage local language models."""
-__version__ = "1.0.8"
+__version__ = "1.0.9"
 
 COMMAND_DIRS = [
     "/usr/local/bin",

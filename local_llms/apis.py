@@ -311,6 +311,8 @@ class RequestProcessor:
     endpoint_handlers = {
         "/v1/chat/completions": (ChatCompletionRequest, ServiceHandler.generate_text_response),
         "/v1/embeddings": (EmbeddingRequest, ServiceHandler.generate_embeddings_response),
+        "/chat/completions": (ChatCompletionRequest, ServiceHandler.generate_text_response),
+        "/embeddings": (EmbeddingRequest, ServiceHandler.generate_embeddings_response),
     }  # Mapping of endpoints to their request models and handlers
     
     # Global worker function
