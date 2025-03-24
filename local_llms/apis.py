@@ -86,7 +86,6 @@ class ChatCompletionRequest(BaseModel):
         last_role = None
         for msg in self.messages:
             role = msg.role.strip()
-            content = msg.content.strip()
             if last_role in {"user", "assistant"} and role == last_role:
                 opposite_role = "assistant" if last_role == "user" else "user"
                 fixed_messages.append(Message(role=opposite_role, content=" "))
@@ -364,6 +363,15 @@ async def health():
     """
     return {"status": "ok"}
 
+# API Endpoints
+@app.get("/v1/health")
+async def health():
+    """
+    Health check endpoint.
+    Returns a simple status to indicate the service is running.
+    """
+    return {"status": "ok"}
+
 @app.post("/update")
 async def update(request: dict):
     """
@@ -372,6 +380,26 @@ async def update(request: dict):
     """
     app.state.service_info = request
     return {"status": "ok"}
+
+@app.post("/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    """
+    Endpoint for chat completion requests.
+    Processes the request, checks for vision content, fixes message order, and generates the response.
+    """
+    logger.info(f"Received chat completion request: {request}")
+    if not request.is_vision_request():  # Updates model if vision content is detected
+        request.fix_message_order()   # Ensures proper user-assistant alternation
+        return await ServiceHandler.generate_text_response(request)
+    return await ServiceHandler.generate_vision_response(request)
+
+@app.post("/embeddings")
+async def embeddings(request: EmbeddingRequest):
+    """
+    Endpoint for embedding requests.
+    Generates embeddings using the specified model.
+    """
+    return await ServiceHandler.generate_embeddings_response(request)
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
@@ -384,6 +412,7 @@ async def chat_completions(request: ChatCompletionRequest):
         request.fix_message_order()   # Ensures proper user-assistant alternation
         return await ServiceHandler.generate_text_response(request)
     return await ServiceHandler.generate_vision_response(request)
+
 
 @app.post("/v1/embeddings")
 async def embeddings(request: EmbeddingRequest):
