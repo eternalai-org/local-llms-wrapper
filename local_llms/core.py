@@ -254,30 +254,33 @@ class LocalLLMManager:
             with open(self.pickle_file, "rb") as f:
                 service_info = pickle.load(f)
             
+            model_hash = service_info.get("hash")
             app_port = service_info.get("app_port")
-            port = service_info.get("port")
-            hash_value = service_info.get("hash")
+            llm_port = service_info.get("port")
+            context_length = service_info.get("context_length")
 
-            # Quick health check with minimum timeout
+            # Perform health checks with minimal timeout
             try:
-                # Check LLM service health
-                llm_url = f"http://localhost:{port}/health"
-                llm_healthy = requests.get(llm_url, timeout=2).status_code == 200
-                
-                # Check API service health
-                api_url = f"http://localhost:{app_port}/health"
-                api_healthy = requests.get(api_url, timeout=2).status_code == 200
+                # Check both services in a more efficient way
+                llm_healthy = requests.get(f"http://localhost:{llm_port}/health", timeout=1).status_code == 200
+                api_healthy = requests.get(f"http://localhost:{app_port}/v1/health", timeout=1).status_code == 200
                 
                 if llm_healthy and api_healthy:
-                    return hash_value
+                    return model_hash
                 
-                self.restart()
-                return hash_value
+                logger.warning(f"Service not healthy: LLM {llm_healthy}, API {api_healthy}")
+                
+                # Attempt to restart the service
+                self.stop()
+                if self.start(model_hash, app_port, context_length=context_length):
+                    return model_hash
+                return None
+                
             except requests.exceptions.RequestException:
                 return None
 
         except Exception as e:
-            logger.error(f"Error getting running model: {str(e)}", exc_info=True)
+            logger.error(f"Error getting running model: {str(e)}")
             return None
 
     def stop(self) -> bool:
