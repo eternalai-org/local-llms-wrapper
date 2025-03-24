@@ -186,7 +186,7 @@ class LocalLLMManager:
 
             # update service metadata to the FastAPI app
             try:
-                update_url = f"http://localhost:{port}/v1/update"
+                update_url = f"http://localhost:{port}/update"
                 response = requests.post(update_url, json=service_metadata, timeout=10)
                 response.raise_for_status()  # Raise exception for HTTP error responses
             except requests.exceptions.RequestException as e:

@@ -10,7 +10,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, validator
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 
 # Configuration
 class Config:
@@ -33,7 +33,8 @@ class Message(BaseModel):
     Represents a single message in a chat completion request.
     """
     role: str      # The role of the message sender (e.g., 'user', 'assistant')
-    content: str   # The content of the message
+    content: Optional[Union[str, List[Dict[str, str]]]]  # The content of the message
+ 
 
 class ToolCall(BaseModel):
     """
@@ -121,16 +122,118 @@ class ServiceHandler:
         Generate a response for chat completion requests, supporting both streaming and non-streaming.
         """
         port = await ServiceHandler.get_service_port()
+        
+        # Convert to dict, supporting both Pydantic v1 and v2
+        request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
 
         if request.stream:
             # Return a streaming response
             return StreamingResponse(
-                ServiceHandler._stream_generator(port, request.dict()),
+                ServiceHandler._stream_generator(port, request_dict),
                 media_type="text/event-stream"
             )
 
         # Make a non-streaming API call
-        return await ServiceHandler._make_api_call(port, "/v1/chat/completions", request.dict())
+        return await ServiceHandler._make_api_call(port, "/v1/chat/completions", request_dict)
+
+    @staticmethod
+    async def generate_vision_response(request: ChatCompletionRequest):
+        """
+        Generate a response for vision-based chat completion requests.
+        Supports a single message with exactly one text prompt and one image (base64 or URL).
+        """
+        # Check if the service supports multimodal inputs
+        multimodal = app.state.service_info.get("multimodal", False)
+        if not multimodal:
+            raise HTTPException(status_code=400, detail="This model does not support vision-based requests")
+
+        # Retrieve configuration values
+        family = app.state.service_info["family"]
+        cli = os.getenv(family)
+        local_text_path = app.state.service_info["local_text_path"]
+        local_projector_path = app.state.service_info["local_projector_path"]
+
+        # Enforce a single message
+        if len(request.messages) != 1:
+            raise HTTPException(status_code=400, detail="Vision-based requests must contain exactly one message")
+
+        # Process the content of the single message
+        content = request.messages[0].content
+        text = None
+        image_url = None
+
+        # Extract exactly one text and one image_url from the content list
+        for item in content:
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=400, detail="Content items must be dictionaries")
+            item_type = item.get("type")
+            if item_type == "text":
+                if text is not None:
+                    raise HTTPException(status_code=400, detail="Only one text prompt is allowed in vision-based requests")
+                text = item.get("text")
+            elif item_type == "image_url":
+                if image_url is not None:
+                    raise HTTPException(status_code=400, detail="Only one image is allowed in vision-based requests")
+                image_url = item.get("image_url", {}).get("url")
+            else:
+                raise HTTPException(status_code=400, detail="Invalid content type in vision-based request")
+
+        # Validate that both text and image_url are present
+        if text is None or image_url is None:
+            raise HTTPException(status_code=400, detail="Vision-based requests must include one text prompt and one image")
+
+        # Handle the image_url: base64 or URL
+        if image_url.startswith("data:image/"):
+            # Base64-encoded image
+            try:
+                header, encoded = image_url.split(",", 1)
+                data = base64.b64decode(encoded)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
+                    temp_file.write(data)
+                    image_path = temp_file.name
+            except Exception as e:
+                raise HTTPException(status_code=400, detail="Invalid base64 image data")
+        else:
+            # Regular URL
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(image_url)
+                    if response.status_code != 200:
+                        raise HTTPException(status_code=400, detail="Failed to download image")
+                    data = response.content
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
+                        temp_file.write(data)
+                        image_path = temp_file.name
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to download image: {str(e)}")
+
+        # Construct and execute the command
+        command = [
+            cli,
+            "--model", local_text_path,
+            "--mmproj", local_projector_path,
+            "--image", image_path,
+            "--prompt", text
+        ]
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                error_message = stderr.decode().strip() if stderr else "Unknown error"
+                raise HTTPException(status_code=500, detail=f"Command failed: {error_message}")
+
+            response = stdout.decode().strip()
+            return response
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(image_path):
+                os.remove(image_path)
     
     @staticmethod
     async def generate_embeddings_response(request: EmbeddingRequest):
@@ -184,8 +287,7 @@ class ServiceHandler:
                     
                 async for line in response.aiter_lines():
                     if line:
-                        yield f"data: {line}\n\n"
-            yield "data: [DONE]\n\n"  # Signal the end of the stream
+                        yield f"{line}\n\n"
         except Exception as e:
             logger.error(f"Error during streaming: {e}")
             yield f"data: Error: {str(e)}\n\n"
@@ -261,7 +363,7 @@ async def health():
     """
     return {"status": "ok"}
 
-@app.post("/v1/update")
+@app.post("/update")
 async def update(request: dict):
     """
     Update the service information in the app's state.
@@ -277,9 +379,10 @@ async def chat_completions(request: ChatCompletionRequest):
     Processes the request, checks for vision content, fixes message order, and generates the response.
     """
     logger.info(f"Received chat completion request: {request}")
-    request.is_vision_request()  # Updates model if vision content is detected
-    request.fix_message_order()   # Ensures proper user-assistant alternation
-    return await ServiceHandler.generate_text_response(request)
+    if not request.is_vision_request():  # Updates model if vision content is detected
+        request.fix_message_order()   # Ensures proper user-assistant alternation
+        return await ServiceHandler.generate_text_response(request)
+    return await ServiceHandler.generate_vision_response(request)
 
 @app.post("/v1/embeddings")
 async def embeddings(request: EmbeddingRequest):
