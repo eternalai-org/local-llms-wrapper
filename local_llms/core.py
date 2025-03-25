@@ -2,12 +2,13 @@ import os
 import time
 import pickle
 import psutil
+import asyncio
 import requests
 import subprocess
 from pathlib import Path
 from loguru import logger
 from typing import Optional
-from local_llms.download import download_model_from_filecoin
+from local_llms.download import download_model_from_filecoin_async
 
 class LocalLLMManager:
     """Manages a local Large Language Model (LLM) service."""
@@ -95,7 +96,7 @@ class LocalLLMManager:
 
         try:
             logger.info(f"Starting local LLM service for model with hash: {hash}")
-            local_model_path = download_model_from_filecoin(hash)
+            local_model_path = asyncio.run(download_model_from_filecoin_async(hash))
             model_running = self.get_running_model()
             if model_running:
                 if model_running == hash:

@@ -1,4 +1,5 @@
 import os
+import pickle
 import shutil
 import hashlib
 from typing import List
@@ -6,6 +7,7 @@ import subprocess
 import shutil
 import tempfile
 import subprocess
+import asyncio
 from pathlib import Path
 
 
@@ -63,3 +65,26 @@ def compute_file_hash(file_path: Path, hash_algo: str = "sha256") -> str:
         for chunk in iter(lambda: f.read(4096), b""):
             hash_func.update(chunk)
     return hash_func.hexdigest()
+
+async def async_move(src: str, dst: str) -> None:
+    """Asynchronously move a file or directory from src to dst."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, shutil.move, src, dst)
+
+async def async_rmtree(path: str) -> None:
+    """Asynchronously remove a directory tree."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, shutil.rmtree, path, True)
+
+async def async_extract_zip(paths: list) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, extract_zip, paths)  # Assuming extract_zip is defined
+
+def check_downloading():
+    tracking_path = os.environ["TRACKING_DOWNLOAD_HASHES"]
+    downloading_files = []
+    if os.path.exists(tracking_path):
+        with open(tracking_path, "rb") as f:
+            downloading_files = pickle.load(f)
+    print(f"Downloading files: {downloading_files}")
+    return downloading_files

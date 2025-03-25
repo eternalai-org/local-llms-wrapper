@@ -16,6 +16,7 @@ setup(
         "python-dotenv",
         "fastapi",
         "uvicorn",
+        "aiohttp"
     ],
     entry_points={
         "console_scripts": [

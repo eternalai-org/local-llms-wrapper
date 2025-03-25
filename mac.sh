@@ -35,6 +35,9 @@ command_exists() {
     command -v "$1" &> /dev/null
 }
 
+export PATH="/opt/homebrew/bin/:$PATH"
+export PATH="$HOME/homebrew/bin:$PATH"
+
 # Step 1: Ensure Homebrew is installed and set PATH
 if ! command_exists brew; then
     log_error "Homebrew is not installed. Please install Homebrew first: https://brew.sh/"

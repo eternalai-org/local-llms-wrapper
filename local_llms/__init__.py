@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 """Local LLMs - A library to manage local language models."""
-__version__ = "1.0.10"
+__version__ = "2.0.1"
 
 COMMAND_DIRS = [
     "/usr/local/bin",
@@ -68,3 +68,5 @@ for cmd_name, env_var_name in required_commands:
 
 running_service_path = (Path.cwd()/ "running_service.pkl").absolute()
 os.environ["RUNNING_SERVICE_FILE"] = str(running_service_path)
+TRACKING_DOWNLOAD_HASHES = Path.cwd() / "download_hashes.pkl"
+os.environ["TRACKING_DOWNLOAD_HASHES"] = str(TRACKING_DOWNLOAD_HASHES)  
