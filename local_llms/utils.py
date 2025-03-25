@@ -86,5 +86,4 @@ def check_downloading():
     if os.path.exists(tracking_path):
         with open(tracking_path, "rb") as f:
             downloading_files = pickle.load(f)
-    print(f"Downloading files: {downloading_files}")
     return downloading_files

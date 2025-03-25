@@ -15,7 +15,7 @@ from local_llms.utils import compute_file_hash, async_extract_zip, async_move, a
 GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 10
 CHUNK_SIZE = 4096
 POSTFIX_MODEL_PATH = ".gguf"
 

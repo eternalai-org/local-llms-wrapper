@@ -34,7 +34,6 @@ class Message(BaseModel):
     """
     role: str      # The role of the message sender (e.g., 'user', 'assistant')
     content: Optional[Union[str, List[Dict[str, str]]]]  # The content of the message
- 
 
 class ToolCall(BaseModel):
     """
