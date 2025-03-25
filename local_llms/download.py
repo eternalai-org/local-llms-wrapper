@@ -197,7 +197,7 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                         continue
 
                     try:
-                        async_extract_zip(paths)
+                        await async_extract_zip(paths)
                     except Exception as e:
                         print(f"Failed to extract files: {e}")
                         continue
