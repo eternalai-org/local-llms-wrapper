@@ -9,7 +9,7 @@ import asyncio
 import pickle
 from tqdm import tqdm
 from pathlib import Path
-from local_llms.utils import compute_file_hash, extract_zip, async_move, async_rmtree
+from local_llms.utils import compute_file_hash, async_extract_zip, async_move, async_rmtree
 
 # Constants
 GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
@@ -197,10 +197,7 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                         continue
 
                     try:
-                        def extract_zip(paths):  # Placeholder, implement as needed
-                            for path in paths:
-                                print(f"Extracting {path}")  # Example
-                        extract_zip(paths)  # Synchronous for simplicity; see notes below
+                        async_extract_zip(paths)
                     except Exception as e:
                         print(f"Failed to extract files: {e}")
                         continue
