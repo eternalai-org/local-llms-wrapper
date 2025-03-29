@@ -7,7 +7,8 @@ import requests
 import subprocess
 from pathlib import Path
 from loguru import logger
-from typing import Optional
+from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
 from local_llms.download import download_model_from_filecoin_async
 
 class LocalLLMManager:
@@ -16,6 +17,165 @@ class LocalLLMManager:
     def __init__(self):
         """Initialize the LocalLLMManager."""       
         self.pickle_file = Path(os.getenv("RUNNING_SERVICE_FILE"))
+        self._process: Optional[subprocess.Popen] = None
+        self._service_info: Optional[Dict[str, Any]] = None
+        self._last_activity: Optional[datetime] = None
+        self._inactivity_threshold = timedelta(hours=1)  # Default 1 hour
+        self._cleanup_task: Optional[asyncio.Task] = None
+        logger.add("local_llm.log", rotation="500 MB", retention="10 days")
+
+    async def start(self, hash: str, port: int = 11434, host: str = "0.0.0.0", context_length: int = 4096) -> bool:
+        """
+        Start the local LLM service in the background.
+
+        Args:
+            hash (str): Filecoin hash of the model to download and run.
+            port (int): Port number for the LLM service (default: 11434).
+            host (str): Host address for the LLM service (default: "0.0.0.0").
+            context_length (int): Context length for the model (default: 4096).
+
+        Returns:
+            bool: True if service started successfully, False otherwise.
+        """
+        if not hash:
+            raise ValueError("Filecoin hash is required to start the service")
+
+        try:
+            # Check if service is already running
+            if self.get_running_model():
+                logger.warning("A service is already running. Use 'stop' to stop it first.")
+                return False
+
+            # Check system resources
+            if not self._check_resources():
+                logger.error("Insufficient system resources to start service")
+                return False
+
+            logger.info(f"Starting local LLM service for model with hash: {hash}")
+            local_model_path = await download_model_from_filecoin_async(hash)
+            
+            # Start the service process
+            self._process = subprocess.Popen(
+                ["ollama", "serve", "--host", host, "--port", str(port)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            # Wait for service to become healthy
+            if not self._wait_for_service(port):
+                logger.error("Service failed to become healthy")
+                self.stop()
+                return False
+
+            # Save service information
+            self._service_info = {
+                "hash": hash,
+                "port": port,
+                "app_port": port + 1,  # API port is service port + 1
+                "context_length": context_length,
+                "process_id": self._process.pid,
+                "start_time": datetime.now().isoformat(),
+                "last_activity": datetime.now().isoformat()
+            }
+            self._last_activity = datetime.now()
+            self._dump_running_service(self._service_info)
+
+            # Start cleanup task if not already running
+            if not self._cleanup_task or self._cleanup_task.done():
+                self._cleanup_task = asyncio.create_task(self._cleanup_inactive_service())
+
+            logger.info(f"Service started successfully on port {port}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error starting service: {str(e)}")
+            if self._process:
+                self.stop()
+            return False
+
+    def stop(self) -> bool:
+        """
+        Stop the currently running LLM service.
+
+        Returns:
+            bool: True if service stopped successfully, False otherwise.
+        """
+        try:
+            if not self.pickle_file.exists():
+                logger.warning("No running LLM service to stop.")
+                return False
+
+            with open(self.pickle_file, "rb") as f:
+                service_info = pickle.load(f)
+                process_id = service_info.get("process_id")
+
+            if process_id:
+                try:
+                    process = psutil.Process(process_id)
+                    process.terminate()
+                    process.wait(timeout=30)
+                    logger.info(f"Successfully terminated process {process_id}")
+                except psutil.NoSuchProcess:
+                    logger.warning(f"Process {process_id} already terminated")
+                except psutil.TimeoutExpired:
+                    logger.warning(f"Process {process_id} did not terminate gracefully, forcing kill")
+                    process.kill()
+
+            self.pickle_file.unlink()
+            self._service_info = None
+            self._last_activity = None
+            logger.info("LLM service stopped successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error stopping LLM service: {str(e)}")
+            return False
+
+    def update_activity(self):
+        """Update the last activity timestamp of the service."""
+        if self._service_info:
+            self._last_activity = datetime.now()
+            self._service_info["last_activity"] = self._last_activity.isoformat()
+            self._dump_running_service(self._service_info)
+
+    async def _cleanup_inactive_service(self):
+        """
+        Background task to check and stop inactive services.
+        """
+        while True:
+            try:
+                if self._service_info and self._last_activity:
+                    time_since_last_activity = datetime.now() - self._last_activity
+                    if time_since_last_activity > self._inactivity_threshold:
+                        logger.info(f"Service inactive for {time_since_last_activity}, stopping...")
+                        self.stop()
+                await asyncio.sleep(300)  # Check every 5 minutes
+            except Exception as e:
+                logger.error(f"Error in cleanup task: {str(e)}")
+                await asyncio.sleep(60)  # Wait a minute before retrying
+
+    def _check_resources(self) -> bool:
+        """
+        Check if system has enough resources to run the LLM service.
+        
+        Returns:
+            bool: True if system has sufficient resources, False otherwise.
+        """
+        try:
+            memory = psutil.virtual_memory()
+            cpu_percent = psutil.cpu_percent(interval=1)
+            
+            if memory.percent > 90:
+                logger.error(f"System memory usage too high: {memory.percent}%")
+                return False
+                
+            if cpu_percent > 90:
+                logger.error(f"System CPU usage too high: {cpu_percent}%")
+                return False
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error checking system resources: {str(e)}")
+            return False
 
     def _wait_for_service(self, port: int, timeout: int = 600) -> bool:
         """
@@ -31,24 +191,56 @@ class LocalLLMManager:
         health_check_url = f"http://localhost:{port}/health"
         start_time = time.time()
         wait_time = 1  # Initial wait time in seconds
+        max_retries = 3
+        
         while time.time() - start_time < timeout:
-            try:
-                status = requests.get(health_check_url, timeout=5)
-                if status.status_code == 200 and status.json().get("status") == "ok":
-                    logger.debug(f"Service healthy at {health_check_url}")
-                    return True
-            except requests.exceptions.RequestException as e:
-                logger.debug(f"Health check failed: {str(e)}")
+            for attempt in range(max_retries):
+                try:
+                    status = requests.get(health_check_url, timeout=5)
+                    if status.status_code == 200 and status.json().get("status") == "ok":
+                        logger.info(f"Service healthy at {health_check_url}")
+                        return True
+                except requests.exceptions.RequestException as e:
+                    logger.warning(f"Health check attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)  # Exponential backoff between retries
+                    continue
             time.sleep(wait_time)
             wait_time = min(wait_time * 2, 60)  # Exponential backoff, max 60s
+        logger.error(f"Service failed to become healthy within {timeout} seconds")
         return False
-    
-    def restart(self):
+
+    def _dump_running_service(self, metadata: dict):
+        """Save service information to pickle file."""
+        try:
+            with open(self.pickle_file, "wb") as f:
+                pickle.dump(metadata, f)
+            logger.info("Service information saved successfully")
+        except Exception as e:
+            logger.error(f"Error saving service information: {str(e)}")
+            raise
+
+    def get_running_model(self) -> Optional[str]:
+        """Get information about the currently running model."""
+        try:
+            if not self.pickle_file.exists():
+                return None
+                
+            with open(self.pickle_file, "rb") as f:
+                service_info = pickle.load(f)
+                self._service_info = service_info
+                self._last_activity = datetime.fromisoformat(service_info.get("last_activity", datetime.now().isoformat()))
+                return service_info.get("hash")
+        except Exception as e:
+            logger.error(f"Error reading service information: {str(e)}")
+            return None
+
+    def restart(self) -> bool:
         """
         Restart the currently running LLM service.
 
         Returns:
-            bool: True if the service restarted successfully, False otherwise.
+            bool: True if service restarted successfully, False otherwise.
         """
         if not self.pickle_file.exists():
             logger.warning("No running LLM service to restart.")
@@ -61,7 +253,6 @@ class LocalLLMManager:
             
             hash = service_info.get("hash")
             port = service_info.get("app_port")
-            llm_port = service_info.get("port")
             context_length = service_info.get("context_length")
 
             logger.info(f"Restarting LLM service '{hash}' running on port {port}...")
@@ -70,281 +261,7 @@ class LocalLLMManager:
             self.stop()
 
             # Start the service with the same parameters
-            return self.start(hash, port, context_length=context_length)
+            return asyncio.run(self.start(hash, port, context_length=context_length))
         except Exception as e:
-            logger.error(f"Error restarting LLM service: {str(e)}", exc_info=True)
+            logger.error(f"Error restarting LLM service: {str(e)}")
             return False
-
-    def start(self, hash: str, port: int = 11434, host: str = "0.0.0.0", context_length: int = 4096) -> bool:
-        """
-        Start the local LLM service in the background.
-
-        Args:
-            hash (str): Filecoin hash of the model to download and run.
-            port (int): Port number for the LLM service (default: 8080).
-            host (str): Host address for the LLM service (default: "0.0.0.0").
-            context_length (int): Context length for the model (default: 4096).
-
-        Returns:
-            bool: True if service started successfully, False otherwise.
-
-        Raises:
-            ValueError: If hash is not provided when no model is running.
-        """
-        if not hash:
-            raise ValueError("Filecoin hash is required to start the service")
-
-        try:
-            logger.info(f"Starting local LLM service for model with hash: {hash}")
-            local_model_path = asyncio.run(download_model_from_filecoin_async(hash))
-            model_running = self.get_running_model()
-            if model_running:
-                if model_running == hash:
-                    logger.warning(f"Model '{hash}' already running on port {port}")
-                    return True
-                logger.info(f"Stopping existing model '{model_running}' on port {port}")
-                self.stop()
-
-            if not os.path.exists(local_model_path):
-                logger.error(f"Model file not found at: {local_model_path}")
-                return False
-
-            llama_server_path = os.getenv("LLAMA_SERVER")
-            if not llama_server_path or not os.path.exists(llama_server_path):
-                logger.error("llama-server executable not found in LLAMA_SERVER or PATH")
-                return False
-
-            llm_running_port = port + 1
-
-            running_llm_command = [
-                llama_server_path,
-                "--jinja",
-                "--model", str(local_model_path),
-                "--port", str(llm_running_port),
-                "--host", host,
-                "-c", str(context_length),
-                "--pooling", "cls",
-                "--no-webui"
-            ]
-
-            logger.info(f"Starting process: {' '.join(running_llm_command)}")
-
-            # Create log files for stdout and stderr for LLM process
-            os.makedirs("logs", exist_ok=True)
-            llm_log_stdout = Path(f"logs/llm_stdout_{llm_running_port}.log")
-            llm_log_stderr = Path(f"logs/llm_stderr_{llm_running_port}.log")
-            
-            try:
-                with open(llm_log_stdout, 'w') as stdout_log, open(llm_log_stderr, 'w') as stderr_log:
-                    llm_process = subprocess.Popen(
-                        running_llm_command,
-                        stdout=stdout_log,
-                        stderr=stderr_log,
-                        preexec_fn=os.setsid
-                    )
-                logger.info(f"LLM logs written to {llm_log_stdout} and {llm_log_stderr}")
-            except Exception as e:
-                logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
-                return False
-
-            if not self._wait_for_service(llm_running_port):
-                logger.error(f"Service failed to start within 600 seconds")
-                llm_process.terminate()
-                return False
-
-            # start the FastAPI app in the background
-
-            uvicorn_command = [
-                "uvicorn",
-                "local_llms.apis:app",
-                "--host", host,
-                "--port", str(port),
-                "--log-level", "info"
-            ]
-
-            logger.info(f"Starting process: {' '.join(uvicorn_command)}")
-
-            # Create log files for stdout and stderr
-            os.makedirs("logs", exist_ok=True)
-            log_path_stdout = Path(f"logs/api_stdout_{port}.log")
-            log_path_stderr = Path(f"logs/api_stderr_{port}.log")
-            
-            try:
-                with open(log_path_stdout, 'w') as stdout_log, open(log_path_stderr, 'w') as stderr_log:
-                    apis_process = subprocess.Popen(
-                        uvicorn_command,
-                        stdout=stdout_log,
-                        stderr=stderr_log,
-                        preexec_fn=os.setsid
-                    )
-                logger.info(f"API logs written to {log_path_stdout} and {log_path_stderr}")
-            except Exception as e:
-                logger.error(f"Error starting FastAPI app: {str(e)}", exc_info=True)
-                llm_process.terminate()
-                return False
-            
-            if not self._wait_for_service(port):
-                logger.error(f"API service failed to start within 600 seconds")
-                llm_process.terminate()
-                apis_process.terminate()
-                return False
-
-            logger.info(f"Service started on port {port} for model: {hash}")
-
-            service_metadata = {
-                "hash": hash,
-                "port": llm_running_port,
-                "pid": llm_process.pid,
-                "app_pid": apis_process.pid,
-                "multimodal": False,
-                "local_text_path": local_model_path,
-                "app_port": port,
-                "context_length": context_length
-            }
-            projector_path = f"{local_model_path}-projector"
-            if os.path.exists(projector_path):
-                service_metadata["multimodal"] = True
-                service_metadata["local_projector_path"] = projector_path
-                filecoin_url = f"https://gateway.lighthouse.storage/ipfs/{hash}"
-                for attempt in range(3):
-                    try:
-                        response = requests.get(filecoin_url, timeout=10)
-                        if response.status_code == 200:
-                            service_metadata["family"] = response.json().get("family")
-                            break
-                    except requests.exceptions.RequestException:
-                        time.sleep(2)  # Delay between retries
-
-            self._dump_running_service(service_metadata)    
-
-            # update service metadata to the FastAPI app
-            try:
-                update_url = f"http://localhost:{port}/update"
-                response = requests.post(update_url, json=service_metadata, timeout=10)
-                response.raise_for_status()  # Raise exception for HTTP error responses
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Failed to update service metadata: {str(e)}")
-                # Stop the partially started service
-                self.stop()
-                return False
-            
-            return True
-
-        except Exception as e:
-            logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
-            return False
-        
-    def _dump_running_service(self, metadata: dict):
-
-        """Dump the running service details to a file."""
-        with open("running_service.pkl", "wb") as f:
-            pickle.dump(metadata, f)
-
-    def get_running_model(self) -> Optional[str]:
-        """
-        Get currently running model hash if the service is healthy.
-
-        Returns:
-            Optional[str]: Running model hash or None if no healthy service exists.
-        """
-        if not self.pickle_file.exists():
-            return None
-
-        try:
-            # Load service info from pickle file
-            with open(self.pickle_file, "rb") as f:
-                service_info = pickle.load(f)
-            
-            model_hash = service_info.get("hash")
-            app_port = service_info.get("app_port")
-            llm_port = service_info.get("port")
-            context_length = service_info.get("context_length")
-            
-            # Check both services with minimal timeout
-            llm_healthy = False
-            api_healthy = False
-            
-            # Use a single session for connection pooling
-            with requests.Session() as session:
-                try:
-                    llm_status = session.get(f"http://localhost:{llm_port}/health", timeout=2)
-                    llm_healthy = llm_status.status_code == 200
-                except requests.exceptions.RequestException:
-                    pass
-            
-                try:
-                    app_status = session.get(f"http://localhost:{app_port}/v1/health", timeout=2)
-                    api_healthy = app_status.status_code == 200
-                except requests.exceptions.RequestException:
-                    pass
-
-            if llm_healthy and api_healthy:
-                return model_hash
-                
-            logger.warning(f"Service not healthy: LLM {llm_healthy}, API {api_healthy}")
-            self.stop()  
-            try:
-                logger.info("Restarting service...")  
-                if self.start(model_hash, app_port, context_length=context_length):
-                    return model_hash
-                return None
-            except Exception as e:
-                logger.error(f"Failed to restart service: {str(e)}")
-                return None
-
-        except Exception as e:
-            logger.error(f"Error getting running model: {str(e)}")
-            return None
-
-    def stop(self) -> bool:
-        """
-        Stop the running LLM service.
-
-        Returns:
-            bool: True if the service stopped successfully, False otherwise.
-        """
-        if not os.path.exists("running_service.pkl"):
-            logger.warning("No running LLM service to stop.")
-            return False
-
-        try:
-            # Load service details from the pickle file
-            with open("running_service.pkl", "rb") as f:
-                service_info = pickle.load(f)
-            
-            hash = service_info.get("hash")
-            pid = service_info.get("pid")
-            app_pid = service_info.get("app_pid")
-            app_port = service_info.get("app_port")
-
-            logger.info(f"Stopping LLM service '{hash}' running on port {app_port} (PID: {app_pid})...")
-
-            # Terminate process by PID
-            if psutil.pid_exists(pid):
-                process = psutil.Process(pid)
-                process.terminate()
-                process.wait(timeout=5)  # Allow process to shut down gracefully
-                
-                if process.is_running():  # Force kill if still alive
-                    logger.warning("Process did not terminate, forcing kill.")
-                    process.kill()
-
-            # Terminate FastAPI app by PID
-            if psutil.pid_exists(app_pid):
-                app_process = psutil.Process(app_pid)
-                app_process.terminate()
-                app_process.wait(timeout=5)  # Allow process to shut down gracefully
-                
-                if app_process.is_running():  # Force kill if
-                    logger.warning("API process did not terminate, forcing kill.")
-                    app_process.kill()
-
-            # Remove the tracking file
-            os.remove("running_service.pkl")
-            logger.info("LLM service stopped successfully.")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error stopping LLM service: {str(e)}", exc_info=True)
-            return False
-        

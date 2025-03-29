@@ -3,136 +3,138 @@ import shutil
 import time
 import httpx
 import requests
-import time
 import aiohttp
 import asyncio
 import pickle
+import logging
 from tqdm import tqdm
 from pathlib import Path
+from typing import Optional, List, Tuple, Dict, Any
+from concurrent.futures import ThreadPoolExecutor
 from local_llms.utils import compute_file_hash, async_extract_zip, async_move, async_rmtree
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Constants
 GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
 MAX_ATTEMPTS = 10
-CHUNK_SIZE = 4096
+CHUNK_SIZE = 8192
 POSTFIX_MODEL_PATH = ".gguf"
+MAX_CONCURRENT_DOWNLOADS = 5
+MAX_RETRY_BACKOFF = 300
+HASH_VERIFICATION_THREADS = 4
 
-def check_downloaded_model(filecoin_hash: str, output_dir: Path = DEFAULT_OUTPUT_DIR) -> bool:
-    """
-    Check if the model is already downloaded and optionally save metadata.
-    
-    Args:
-        filecoin_hash: IPFS hash of the model metadata
-        output_file: Optional path to save metadata JSON
-    
-    Returns:
-        bool: Whether the model is already downloaded
-    """    
-    try:
-        local_path = output_dir / f"{filecoin_hash}{POSTFIX_MODEL_PATH}"
-        local_path = local_path.absolute()
-        
-        # Check if model exists
-        is_downloaded = local_path.exists()
-            
-        if is_downloaded:
-            print(f"Model already exists at: {local_path}")
-            
-        return is_downloaded
-        
-    except requests.RequestException as e:
-        print(f"Failed to fetch model metadata: {e}")
-        return False
+class DownloadManager:
+    def __init__(self, max_concurrent: int = MAX_CONCURRENT_DOWNLOADS):
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.session: Optional[aiohttp.ClientSession] = None
+        self._executor = ThreadPoolExecutor(max_workers=HASH_VERIFICATION_THREADS)
 
-async def download_single_file_async(session: aiohttp.ClientSession, file_info: dict, folder_path: Path, max_attempts: int = MAX_ATTEMPTS) -> tuple:
-    """
-    Asynchronously download a single file and verify its SHA256 hash, with retries.
+    async def __aenter__(self):
+        timeout = aiohttp.ClientTimeout(total=3600)  # 1 hour timeout
+        self.session = aiohttp.ClientSession(timeout=timeout)
+        return self
 
-    Args:
-        session (aiohttp.ClientSession): Reusable HTTP session.
-        file_info (dict): Contains 'cid', 'file_hash', and 'file_name'.
-        folder_path (Path): Directory to save the file.
-        max_attempts (int): Number of retries on failure.
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.session:
+            await self.session.close()
+        self._executor.shutdown(wait=True)
 
-    Returns:
-        tuple: (Path to file if successful, None) or (None, error message).
-    """
-    cid = file_info["cid"]
-    expected_hash = file_info["file_hash"]
-    file_name = file_info["file_name"]
-    file_path = folder_path / file_name
-    attempts = 0
-
-    if file_path.exists():
-        computed_hash = compute_file_hash(file_path)
-        if computed_hash == expected_hash:
-            print(f"File {cid} already exists with correct hash.")
-            return file_path, None
-        else:
-            print(f"File {cid} exists but hash mismatch. Retrying...")
-            file_path.unlink()
-
-    while attempts < max_attempts:
+    async def download_with_progress(self, url: str, file_path: Path, desc: str) -> bool:
+        """Download a file with progress bar and proper error handling."""
         try:
-            url = f"{GATEWAY_URL}{cid}"
-            async with session.get(url) as response:
-                if response.status == 200:
+            async with self.semaphore:  # Limit concurrent downloads
+                async with self.session.get(url) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to download {url}. Status: {response.status}")
+                        return False
+
                     total_size = int(response.headers.get("content-length", 0))
                     with file_path.open("wb") as f, tqdm(
                         total=total_size,
                         unit="B",
                         unit_scale=True,
-                        desc=f"Downloading {file_name}",
+                        desc=desc,
                         ncols=80
                     ) as progress:
-                        async for chunk in response.content.iter_chunked(4096):
+                        async for chunk in response.content.iter_chunked(CHUNK_SIZE):
                             f.write(chunk)
                             progress.update(len(chunk))
-
-                    computed_hash = compute_file_hash(file_path)
-                    if computed_hash == expected_hash:
-                        print(f"File {cid} downloaded and verified successfully.")
-                        return file_path, None
-                    else:
-                        print(f"Hash mismatch for {cid}. Expected {expected_hash}, got {computed_hash}.")
-                        file_path.unlink()
-                else:
-                    print(f"Failed to download {cid}. Status: {response.status}")
-
+                    return True
         except Exception as e:
-            print(f"Exception downloading {cid}: {e}")
+            logger.error(f"Error downloading {url}: {e}", exc_info=True)
+            return False
 
-        attempts += 1
-        if attempts < max_attempts:
-            print(f"Retrying in {SLEEP_TIME}s (Attempt {attempts + 1}/{max_attempts})")
-            await asyncio.sleep(SLEEP_TIME)
-        else:
-            print(f"Failed to download {cid} after {max_attempts} attempts.")
-            return None, f"Failed to download {cid} after {max_attempts} attempts."
+    async def verify_hash(self, file_path: Path, expected_hash: str) -> bool:
+        """Verify file hash using a thread pool to avoid blocking."""
+        try:
+            computed_hash = await asyncio.get_event_loop().run_in_executor(
+                self._executor, compute_file_hash, file_path
+            )
+            return computed_hash == expected_hash
+        except Exception as e:
+            logger.error(f"Error verifying hash for {file_path}: {e}", exc_info=True)
+            return False
 
-async def download_files_from_lighthouse_async(data: dict) -> list:
-    """
-    Asynchronously download files concurrently using Filecoin CIDs and verify hashes.
+async def download_single_file_async(
+    manager: DownloadManager,
+    file_info: Dict[str, Any],
+    folder_path: Path,
+    max_attempts: int = MAX_ATTEMPTS
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Asynchronously download a single file with improved error handling and retries."""
+    cid = file_info["cid"]
+    expected_hash = file_info["file_hash"]
+    file_name = file_info["file_name"]
+    file_path = folder_path / file_name
 
-    Args:
-        data (dict): JSON data with 'folder_name', 'files', 'num_of_files', and 'filecoin_hash'.
+    try:
+        if file_path.exists():
+            if await manager.verify_hash(file_path, expected_hash):
+                logger.info(f"File {cid} already exists with correct hash.")
+                return file_path, None
+            file_path.unlink()
 
-    Returns:
-        list: Paths of successfully downloaded files, or empty list if failed.
-    """
+        for attempt in range(max_attempts):
+            try:
+                url = f"{GATEWAY_URL}{cid}"
+                if await manager.download_with_progress(url, file_path, f"Downloading {file_name}"):
+                    if await manager.verify_hash(file_path, expected_hash):
+                        logger.info(f"File {cid} downloaded and verified successfully.")
+                        return file_path, None
+                    file_path.unlink()
+                    logger.warning(f"Hash mismatch for {cid}. Expected {expected_hash}")
+
+            except Exception as e:
+                logger.error(f"Exception downloading {cid}: {e}", exc_info=True)
+
+            if attempt < max_attempts - 1:
+                backoff = min(SLEEP_TIME * (2 ** attempt), MAX_RETRY_BACKOFF)
+                logger.info(f"Retrying in {backoff}s (Attempt {attempt + 2}/{max_attempts})")
+                await asyncio.sleep(backoff)
+
+        return None, f"Failed to download {cid} after {max_attempts} attempts."
+    except Exception as e:
+        logger.error(f"Critical error downloading {cid}: {e}", exc_info=True)
+        return None, str(e)
+
+async def download_files_from_lighthouse_async(data: Dict[str, Any]) -> List[Path]:
+    """Asynchronously download files with improved concurrency control."""
     folder_name = data["folder_name"]
     folder_path = Path(folder_name)
     folder_path.mkdir(exist_ok=True)
     num_of_files = data["num_of_files"]
     filecoin_hash = data["filecoin_hash"]
 
-    async with aiohttp.ClientSession() as session:
+    async with DownloadManager() as manager:
         tasks = [
-            download_single_file_async(session, file_info, folder_path)
+            download_single_file_async(manager, file_info, folder_path)
             for file_info in data["files"]
         ]
+        
         successful_downloads = []
         for future in asyncio.as_completed(tasks):
             path, error = await future
@@ -140,32 +142,39 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
                 successful_downloads.append(path)
                 print(f"[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {len(successful_downloads)}-{num_of_files} --hash {filecoin_hash}")
             else:
-                print(f"Download failed: {error}")
+                logger.error(f"Download failed: {error}")
 
         if len(successful_downloads) == num_of_files:
-            print(f"All {num_of_files} files downloaded successfully.")
+            logger.info(f"All {num_of_files} files downloaded successfully.")
             return successful_downloads
         else:
-            print(f"Downloaded {len(successful_downloads)} out of {num_of_files} files.")
+            logger.warning(f"Downloaded {len(successful_downloads)} out of {num_of_files} files.")
             return []
 
-async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Path = DEFAULT_OUTPUT_DIR) -> str | None:
+def check_downloaded_model(filecoin_hash: str, output_dir: Path = DEFAULT_OUTPUT_DIR) -> bool:
+    """Check if the model is already downloaded and verified."""
+    try:
+        local_path = output_dir / f"{filecoin_hash}{POSTFIX_MODEL_PATH}"
+        local_path = local_path.absolute()
+        return local_path.exists()
+    except Exception as e:
+        logger.error(f"Error checking downloaded model: {e}", exc_info=True)
+        return False
+
+async def download_model_from_filecoin_async(
+    filecoin_hash: str,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    max_retries: int = MAX_ATTEMPTS
+) -> Optional[str]:
     """
-    Asynchronously download a model from Filecoin using its IPFS hash.
-
-    Args:
-        filecoin_hash (str): IPFS hash of the model metadata.
-        output_dir (Path): Directory to save the downloaded model.
-
-    Returns:
-        str | None: Path to the downloaded model if successful, None otherwise.
+    Asynchronously download a model from Filecoin with improved error handling and resource management.
     """
     output_dir.mkdir(exist_ok=True, parents=True)
     local_path = output_dir / f"{filecoin_hash}{POSTFIX_MODEL_PATH}"
     local_path_str = str(local_path.absolute())
 
     if check_downloaded_model(filecoin_hash, output_dir):
-        print(f"Using existing model at {local_path_str}")
+        logger.info(f"Using existing model at {local_path_str}")
         return local_path_str
 
     tracking_path = os.environ["TRACKING_DOWNLOAD_HASHES"]
@@ -174,67 +183,85 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
         with open(tracking_path, "rb") as f:
             downloading_files = pickle.load(f)
 
-    downloading_files.append(filecoin_hash)
-    with open(tracking_path, "wb") as f:
-        pickle.dump(downloading_files, f)
+    if filecoin_hash not in downloading_files:
+        downloading_files.append(filecoin_hash)
+        with open(tracking_path, "wb") as f:
+            pickle.dump(downloading_files, f)
 
     input_link = f"{GATEWAY_URL}{filecoin_hash}"
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            print(f"Downloading model metadata (attempt {attempt}/{MAX_ATTEMPTS})")
-            async with aiohttp.ClientSession() as session:
-                async with session.get(input_link) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    data["filecoin_hash"] = filecoin_hash
-                    folder_name = data["folder_name"]
-                    folder_path = Path.cwd() / folder_name
-                    folder_path.mkdir(exist_ok=True, parents=True)
+    temp_folder = None
 
-                    paths = await download_files_from_lighthouse_async(data)
-                    if not paths:
-                        print("Failed to download model files")
-                        continue
-
-                    try:
-                        await async_extract_zip(paths)
-                    except Exception as e:
-                        print(f"Failed to extract files: {e}")
-                        continue
-
-                    try:
-                        source_text_path = folder_path / folder_name
-                        source_text_path = source_text_path.absolute()
-                        print(f"Moving model to {local_path_str}")
-                        if source_text_path.exists():
-                            source_projector_path = folder_path / (folder_name + "-projector")
-                            source_projector_path = source_projector_path.absolute()
-                            if source_projector_path.exists():
-                                await async_move(str(source_projector_path), local_path_str + "-projector")
-                            await async_move(str(source_text_path), local_path_str)
-                        else:
-                            print(f"Model not found at {source_text_path}")
+    try:
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Downloading model metadata (attempt {attempt}/{max_retries})")
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(input_link) as response:
+                        response.raise_for_status()
+                        data = await response.json()
+                        data["filecoin_hash"] = filecoin_hash
+                        
+                        temp_folder = Path.cwd() / f"temp_{filecoin_hash}_{attempt}"
+                        temp_folder.mkdir(exist_ok=True, parents=True)
+                        
+                        paths = await download_files_from_lighthouse_async(data)
+                        if not paths:
+                            logger.error("Failed to download model files")
                             continue
 
-                        if folder_path.exists():
-                            await async_rmtree(str(folder_path))
-                        print(f"Model download complete: {local_path_str}")
+                        try:
+                            await async_extract_zip(paths)
+                        except Exception as e:
+                            logger.error(f"Failed to extract files: {e}", exc_info=True)
+                            continue
+
+                        source_text_path = temp_folder / data["folder_name"]
+                        source_text_path = source_text_path.absolute()
+                        
+                        if not source_text_path.exists():
+                            logger.error(f"Model not found at {source_text_path}")
+                            continue
+
+                        logger.info(f"Moving model to {local_path_str}")
+                        source_projector_path = temp_folder / (data["folder_name"] + "-projector")
+                        
+                        if source_projector_path.exists():
+                            await async_move(str(source_projector_path), local_path_str + "-projector")
+                        
+                        await async_move(str(source_text_path), local_path_str)
+                        
+                        if temp_folder.exists():
+                            await async_rmtree(str(temp_folder))
+                        
+                        logger.info(f"Model download complete: {local_path_str}")
+                        
                         with open(tracking_path, "wb") as f:
                             pickle.dump([f for f in downloading_files if f != filecoin_hash], f)
+                        
                         return local_path_str
-                    except Exception as e:
-                        print(f"Failed to move model: {e}")
-                        continue
 
+            except Exception as e:
+                logger.error(f"Download attempt {attempt} failed: {e}", exc_info=True)
+                if attempt < max_retries:
+                    backoff = min(SLEEP_TIME * (2 ** (attempt - 1)), MAX_RETRY_BACKOFF)
+                    logger.info(f"Retrying in {backoff} seconds")
+                    await asyncio.sleep(backoff)
+                continue
+
+    except Exception as e:
+        logger.error(f"Critical error during download: {e}", exc_info=True)
+    finally:
+        if temp_folder and temp_folder.exists():
+            try:
+                await async_rmtree(str(temp_folder))
+            except Exception as e:
+                logger.error(f"Failed to clean up temporary folder: {e}", exc_info=True)
+        
+        try:
+            with open(tracking_path, "wb") as f:
+                pickle.dump([f for f in downloading_files if f != filecoin_hash], f)
         except Exception as e:
-            print(f"Download attempt {attempt} failed: {e}")
-            if attempt < MAX_ATTEMPTS:
-                backoff = min(SLEEP_TIME * (2 ** (attempt - 1)), 300)
-                print(f"Retrying in {backoff} seconds")
-                await asyncio.sleep(backoff)
+            logger.error(f"Failed to update tracking file: {e}", exc_info=True)
 
-    with open(tracking_path, "wb") as f:
-        pickle.dump([f for f in downloading_files if f != filecoin_hash], f)
-
-    print("All download attempts failed")
+    logger.error("All download attempts failed")
     return None
