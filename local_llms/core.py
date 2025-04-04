@@ -222,7 +222,7 @@ class LocalLLMManager:
             os.makedirs("logs", exist_ok=True)
             llm_log_stdout = Path(f"logs/llm_stdout_{llm_running_port}.log")
             llm_log_stderr = Path(f"logs/llm_stderr_{llm_running_port}.log")
-            
+            llm_process = None
             try:
                 with open(llm_log_stdout, 'w') as stdout_log, open(llm_log_stderr, 'w') as stderr_log:
                     llm_process = subprocess.Popen(
@@ -235,7 +235,9 @@ class LocalLLMManager:
             except Exception as e:
                 logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
                 return False
-
+            if not llm_process:
+                logger.error(f"Failed to start LLM service")
+                return False
             if not self._wait_for_service(llm_running_port):
                 logger.error(f"Service failed to start within 600 seconds")
                 llm_process.terminate()
