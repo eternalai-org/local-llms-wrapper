@@ -49,8 +49,9 @@ class ToolCall(BaseModel):
     """
     Represents a tool call within a chat completion request.
     """
-    type: str             # The type of tool call
-    function: Dict[str, str]  # Details of the function to be called
+    id: str = Field(..., description="The unique identifier for the tool call")
+    type: str = Field(..., description="The type of tool call")
+    function: Dict[str, str] = Field(..., description="Details of the function to be called")
 
 # Data Models
 class Message(BaseMessage):
