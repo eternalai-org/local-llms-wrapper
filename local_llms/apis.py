@@ -49,8 +49,7 @@ class ToolCall(BaseModel):
     """
     Represents a tool call within a chat completion request.
     """
-    id: Optional[str] = None  # ID of the tool call
-    type: str                 # The type of tool call
+    type: str             # The type of tool call
     function: Dict[str, str]  # Details of the function to be called
 
 # Data Models
@@ -121,60 +120,47 @@ class ChatCompletionRequest(BaseModel):
         """
         if not self.messages:
             return
-            
+
+        # Step 1: Process messages and merge tool messages
         fixed_messages = []
-        prev_message = None
-        
-        for msg in self.messages:
-            # Handle tool messages by merging them with the previous assistant message
-            if msg.role == "tool":
-                if prev_message is None or prev_message.role != "assistant":
-                    raise ValueError("Tool messages must follow an assistant message")
-                
-                # Get content from both messages
-                tool_calls = prev_message.tool_calls if prev_message.tool_calls is not None else []
-                tool_content = msg.content
-                tool_call_id = msg.tool_call_id or "unknown"
-                
-                content = ""
-                # Find matching tool call
-                matching_tool_call = None
-                for tool_call in tool_calls:
-                    if tool_call_id != "unknown" and hasattr(tool_call, "id") and tool_call.id == tool_call_id:
-                        matching_tool_call = tool_call
-                        break
-                
-                # If no specific match found but we have tool calls, use the first one
-                if matching_tool_call is None and tool_calls:
-                    matching_tool_call = tool_calls[0]
-                
-                if matching_tool_call:
-                    # Format using the required format with tool_call and tool_response tags
-                    content += "<tool_call>\n"
-                    function_name = matching_tool_call.function.get("name", "unknown_function")
-                    function_args = matching_tool_call.function.get("arguments", "{}")
-                    content += f'{{"name": "{function_name}", "arguments": {function_args}}}'
-                    content += "\n</tool_call><|im_end|>\n\n"
-                    content += f"<tool_response>\n{tool_content}\n</tool_response><|im_end|>\n"
-                else:
-                    # Fallback if no tool call found
-                    content = f"<tool_response>\n{tool_content}\n</tool_response><|im_end|>\n"
-                
-                # Remove the previous assistant message and add the merged one
-                fixed_messages.pop()  # Remove the last assistant message
-                fixed_messages.append(BaseMessage(
-                    role="assistant",
-                    content=content
-                ))
+        i = 0
+        while i < len(self.messages):
+            msg = self.messages[i]
+            if msg.role == "assistant" and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                # Collect consecutive tool messages
+                tool_responses = {}
+                j = i + 1
+                while j < len(self.messages) and self.messages[j].role == "tool":
+                    tool_msg = self.messages[j]
+                    if hasattr(tool_msg, 'tool_call_id') and tool_msg.tool_call_id:
+                        tool_responses[tool_msg.tool_call_id] = tool_msg.content
+                    j += 1
+                # Construct merged content
+                content = msg.content or ""
+                for tool_call in msg.tool_calls:
+                    call_info = f"Calling function `{tool_call.function['name']}` with arguments `{tool_call.function['arguments']}`"
+                    response = tool_responses.get(tool_call.id, "(pending)")
+                    content += f"\n\n{call_info}\n\nFunction response:\n{response}\n\n"
+                fixed_messages.append(BaseMessage(role="assistant", content=content))
+                i = j  # Skip the tool messages
+            elif msg.role == "tool":
+                raise ValueError("Stray tool message without preceding assistant message with tool_calls")
             else:
-                fixed_messages.append(BaseMessage(
-                    role=msg.role,
-                    content=msg.content
-                ))
-            
-            prev_message = msg
-            
-        self.messages = fixed_messages
+                fixed_messages.append(BaseMessage(role=msg.role, content=msg.content))
+                i += 1
+
+        # Step 2: Ensure alternation
+        final_messages = []
+        for idx, msg in enumerate(fixed_messages):
+            if idx > 0 and msg.role == final_messages[-1].role:
+                dummy_role = "user" if msg.role == "assistant" else "assistant"
+                dummy_content = "Please continue" if dummy_role == "user" else "Thinking..."
+                final_messages.append(BaseMessage(role=dummy_role, content=dummy_content))
+            final_messages.append(msg)
+
+        print(final_messages)
+
+        self.messages = final_messages
 
 class EmbeddingRequest(BaseModel):
     """
