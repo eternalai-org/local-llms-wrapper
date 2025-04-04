@@ -39,14 +39,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+
+class BaseMessage(BaseModel):
+    role: str
+    content: Optional[Union[str, List[Dict[str, str]]]]
+
 # Data Models
-class Message(BaseModel):
+class Message(BaseMessage):
     """
     Represents a single message in a chat completion request.
     """
-    role: str      # The role of the message sender (e.g., 'user', 'assistant', 'tool')
-    content: Optional[Union[str, List[Dict[str, str]]]]  # The content of the message
     tool_call_id: Optional[str] = None  # ID of the tool call, if this is a tool message
+    
 
 class ToolCall(BaseModel):
     """
@@ -60,7 +64,7 @@ class ChatCompletionRequest(BaseModel):
     Model for chat completion requests, including messages, streaming option, and tools.
     """
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
-    messages: List[Message]                 # List of messages in the chat
+    messages: Optional[Union[List[Message], List[BaseMessage]]]
     stream: Optional[bool] = False          # Whether to stream the response
     tools: Optional[Any] = None             # Optional list of tools to use
     max_tokens: Optional[int] = None        # Maximum tokens in the response
@@ -134,12 +138,15 @@ class ChatCompletionRequest(BaseModel):
                 
                 # Remove the previous assistant message and add the merged one
                 fixed_messages.pop()  # Remove the last assistant message
-                fixed_messages.append(Message(
+                fixed_messages.append(BaseMessage(
                     role="assistant",
                     content=merged_content
                 ))
             else:
-                fixed_messages.append(msg)
+                fixed_messages.append(BaseMessage(
+                    role=msg.role,
+                    content=msg.content
+                ))
             
             prev_message = msg
             
