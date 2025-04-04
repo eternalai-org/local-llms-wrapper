@@ -208,6 +208,8 @@ class ServiceHandler:
         request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
 
         if request.stream:
+            if request.tools:
+                raise HTTPException(status_code=400, detail="Streaming is not supported with tools")
             # Return a streaming response
             return StreamingResponse(
                 ServiceHandler._stream_generator(port, request_dict),
