@@ -44,7 +44,6 @@ class BaseMessage(BaseModel):
     role: str
     content: Optional[Union[str, List[Dict[str, str]]]]
 
-
 class ToolCall(BaseModel):
     """
     Represents a tool call within a chat completion request.
@@ -136,12 +135,24 @@ class ChatCompletionRequest(BaseModel):
                     if hasattr(tool_msg, 'tool_call_id') and tool_msg.tool_call_id:
                         tool_responses[tool_msg.tool_call_id] = tool_msg.content
                     j += 1
+                
                 # Construct merged content
                 content = msg.content or ""
+                
                 for tool_call in msg.tool_calls:
-                    call_info = f"Calling function `{tool_call.function['name']}` with arguments `{tool_call.function['arguments']}`"
-                    response = tool_responses.get(tool_call.id, "(pending)")
-                    content += f"\n\n{call_info}\n\nFunction response:\n{response}\n\n"
+                    tool_call_id = tool_call.id
+                    function_name = tool_call.function.get("name", "unknown_function")
+                    function_args = tool_call.function.get("arguments", "{}")
+                    
+                    # Add tool call in the required format
+                    content += f"\n<tool_call>\n"
+                    content += f'{{"name": "{function_name}", "arguments": {function_args}}}'
+                    content += f"\n</tool_call><|im_end|>\n\n"
+                    
+                    # Add tool response if available
+                    response = tool_responses.get(tool_call_id, "(pending)")
+                    content += f"<tool_response>\n{response}\n</tool_response><|im_end|>\n"
+                
                 fixed_messages.append(BaseMessage(role="assistant", content=content))
                 i = j  # Skip the tool messages
             elif msg.role == "tool":
@@ -149,19 +160,8 @@ class ChatCompletionRequest(BaseModel):
             else:
                 fixed_messages.append(BaseMessage(role=msg.role, content=msg.content))
                 i += 1
-
-        # Step 2: Ensure alternation
-        final_messages = []
-        for idx, msg in enumerate(fixed_messages):
-            if idx > 0 and msg.role == final_messages[-1].role:
-                dummy_role = "user" if msg.role == "assistant" else "assistant"
-                dummy_content = "Please continue" if dummy_role == "user" else "Thinking..."
-                final_messages.append(BaseMessage(role=dummy_role, content=dummy_content))
-            final_messages.append(msg)
-
-        print(final_messages)
-
-        self.messages = final_messages
+                
+        self.messages = fixed_messages
 
 class EmbeddingRequest(BaseModel):
     """
@@ -660,8 +660,8 @@ async def handle_completion_request(request: ChatCompletionRequest, endpoint: st
     if request.is_vision_request():
         return await ServiceHandler.generate_vision_response(request)
     
-    # request.fix_message_order()
-    # logger.info(f"Fixed message order: {request.messages}")
+    request.fix_message_order()
+    logger.info(f"Fixed message order: {request.messages}")
     return await ServiceHandler.generate_text_response(request)
 
 @app.post("/chat/completions")
