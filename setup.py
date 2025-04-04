@@ -5,6 +5,13 @@ setup(
     name="local_llms",
     version=__version__,
     packages=find_packages(),
+    package_data={
+        "local_llms": [
+            "examples/*.jinja",
+            "examples/*.py",
+        ],
+    },
+    include_package_data=True,
     install_requires=[
         "requests",
         "tqdm",

@@ -10,6 +10,7 @@ from loguru import logger
 from typing import Optional, Dict, Any
 import gc
 import signal
+import pkg_resources
 from local_llms.download import download_model_from_filecoin_async
 
 class LocalLLMManager:
@@ -196,7 +197,7 @@ class LocalLLMManager:
                     "-c", str(context_length),
                     "--pooling", "cls",
                     "--no-webui",
-                    "--chat-template", "chatml"
+                    "--chat-template-file", "local_llms/examples/gemma3_template.jinja"
                 ]
             else:
                 running_llm_command = [
