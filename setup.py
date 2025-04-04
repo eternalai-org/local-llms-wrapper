@@ -5,6 +5,12 @@ setup(
     name="local_llms",
     version=__version__,
     packages=find_packages(),
+    package_data={
+        "local_llms": [
+            "examples/*.jinja"
+        ],
+    },
+    include_package_data=True,
     install_requires=[
         "requests",
         "tqdm",
@@ -16,7 +22,8 @@ setup(
         "python-dotenv",
         "fastapi",
         "uvicorn",
-        "aiohttp"
+        "aiohttp",
+        "setuptools"
     ],
     entry_points={
         "console_scripts": [

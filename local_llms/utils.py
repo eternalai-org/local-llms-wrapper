@@ -9,6 +9,7 @@ import tempfile
 import subprocess
 import asyncio
 from pathlib import Path
+import pkg_resources
 
 
 def compress_folder(model_folder: str, zip_chunk_size: int = 128, threads: int = 1) -> str:

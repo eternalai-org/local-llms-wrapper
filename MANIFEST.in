@@ -1,0 +1,2 @@
+include README.md
+include local_llms/examples/*.jinja 

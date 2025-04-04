@@ -10,6 +10,7 @@ from loguru import logger
 from typing import Optional, Dict, Any
 import gc
 import signal
+import pkg_resources
 from local_llms.download import download_model_from_filecoin_async
 
 class LocalLLMManager:
@@ -173,7 +174,7 @@ class LocalLLMManager:
                 "last_activity": time.time()
             }
             filecoin_url = f"https://gateway.lighthouse.storage/ipfs/{hash}"
-            is_gemma3 = False
+            is_gemma = False
             for attempt in range(3):
                 try:
                     response = requests.get(filecoin_url, timeout=10)
@@ -181,12 +182,12 @@ class LocalLLMManager:
                         response_json = response.json()
                         service_metadata["family"] = response_json.get("family", "")
                         folder_name = response_json["folder_name"]
-                        is_gemma3 = True if ("gemma" in folder_name.lower()) else False
+                        is_gemma = True if folder_name.startswith("gemma") else False
                         break
                 except requests.exceptions.RequestException:
                     time.sleep(2)  # Delay between retries
 
-            if is_gemma3:
+            if is_gemma:
                 running_llm_command = [
                     llama_server_path,
                     "--jinja",
@@ -196,7 +197,7 @@ class LocalLLMManager:
                     "-c", str(context_length),
                     "--pooling", "cls",
                     "--no-webui",
-                    "--chat-template", "chatml"
+                    "--chat-template-file", "local_llms/examples/gemma3_template.jinja"
                 ]
             else:
                 running_llm_command = [
