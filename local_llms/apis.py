@@ -44,7 +44,7 @@ class Message(BaseModel):
     """
     Represents a single message in a chat completion request.
     """
-    role: str      # The role of the message sender (e.g., 'user', 'assistant')
+    role: str      # The role of the message sender (e.g., 'user', 'assistant', 'tool')
     content: Optional[Union[str, List[Dict[str, str]]]]  # The content of the message
     tool_call_id: Optional[str] = None  # ID of the tool call, if this is a tool message
 
@@ -641,6 +641,7 @@ async def handle_completion_request(request: ChatCompletionRequest, endpoint: st
         return await ServiceHandler.generate_vision_response(request)
     
     request.fix_message_order()
+    logger.info(f"Fixed message order: {request.messages}")
     return await ServiceHandler.generate_text_response(request)
 
 @app.post("/chat/completions")
