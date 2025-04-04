@@ -173,16 +173,20 @@ class LocalLLMManager:
                 "last_activity": time.time()
             }
             filecoin_url = f"https://gateway.lighthouse.storage/ipfs/{hash}"
+            is_gemma3 = False
             for attempt in range(3):
                 try:
                     response = requests.get(filecoin_url, timeout=10)
                     if response.status_code == 200:
-                        service_metadata["family"] = response.json().get("family", "")
+                        response_json = response.json()
+                        service_metadata["family"] = response_json.get("family", "")
+                        folder_name = response_json["folder_name"]
+                        is_gemma3 = True if ("gemma" in folder_name.lower()) else False
                         break
                 except requests.exceptions.RequestException:
                     time.sleep(2)  # Delay between retries
 
-            if service_metadata["family"] == "gemma3":
+            if is_gemma3:
                 running_llm_command = [
                     llama_server_path,
                     "--jinja",

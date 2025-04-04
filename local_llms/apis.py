@@ -50,7 +50,7 @@ class ToolCall(BaseModel):
 
 class Message(BaseModel):
     role: str
-    content: Optional[Union[str, List[Dict[str, str]]]] = None
+    content: Optional[Union[str, List[Dict[str, str]]]] = ""
     tool_call_id: Optional[str] = None  # ID of the tool call, if this is a tool message
     tool_calls: Optional[List[ToolCall]] = None
     
