@@ -39,18 +39,12 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-class Message(BaseModel):
-    role: str
-    content: Optional[Union[str, List[Dict[str, str]]]] = None
-    tool_call_id: Any = None
-    tool_calls: Any = None
-
 class ChatCompletionRequest(BaseModel):
     """
     Model for chat completion requests, including messages, streaming option, and tools.
     """
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
-    messages: Optional[Union[List[Message]]]
+    messages: Optional[Union[List[Any]]]
     stream: Optional[bool] = False          # Whether to stream the response
     tools: Optional[Any] = None             # Optional list of tools to use
     max_tokens: Optional[int] = None        # Maximum tokens in the response
@@ -76,7 +70,7 @@ class ChatCompletionRequest(BaseModel):
             return False
             
         last_message = self.messages[-1]
-        if last_message.role != "user":
+        if last_message.get("role") != "user":
             # Check all messages if the last one is not from user
             for message in self.messages:
                 if self._check_message_for_image(message):
@@ -86,9 +80,9 @@ class ChatCompletionRequest(BaseModel):
         # Check just the last user message
         return self._check_message_for_image(last_message)
     
-    def _check_message_for_image(self, message: Message) -> bool:
+    def _check_message_for_image(self, message: Any) -> bool:
         """Helper method to check if a message contains an image."""
-        content = message.content
+        content = message.get("content")
         if isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "image_url":
@@ -100,11 +94,14 @@ class ChatCompletionRequest(BaseModel):
         if self.messages:
             return
         fixed_messages = []
-        if self.messages[0].role == "system":
+        if self.messages[0].get("role") == "system":
             self.messages.pop(0)
             fixed_messages.append(
-                Message(role="system", content="You are a helpful assistant capable of using tools when necessary. Respond in natural language when tools are not required."
-            ))
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant capable of using tools when necessary. Respond in natural language when tools are not required."
+                }
+            )
         for msg in self.messages:
             fixed_messages.append(msg)
         self.messages = fixed_messages
