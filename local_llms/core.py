@@ -188,6 +188,9 @@ class LocalLLMManager:
                     time.sleep(2)  # Delay between retries
 
             if is_gemma:
+                # Use pkg_resources to get the absolute path to the template file
+                template_path = pkg_resources.resource_filename("local_llms", "examples/gemma3_template.jinja")
+                
                 running_llm_command = [
                     llama_server_path,
                     "--jinja",
@@ -197,7 +200,7 @@ class LocalLLMManager:
                     "-c", str(context_length),
                     "--pooling", "cls",
                     "--no-webui",
-                    "--chat-template-file", "local_llms/examples/gemma3_template.jinja"
+                    "--chat-template-file", template_path
                 ]
             else:
                 running_llm_command = [
