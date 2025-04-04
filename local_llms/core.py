@@ -166,8 +166,6 @@ class LocalLLMManager:
             service_metadata = {
                 "hash": hash,
                 "port": llm_running_port,
-                "pid": llm_process.pid,
-                "app_pid": apis_process.pid,
                 "multimodal": False,
                 "local_text_path": local_model_path,
                 "app_port": port,
@@ -235,9 +233,7 @@ class LocalLLMManager:
             except Exception as e:
                 logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
                 return False
-            if not llm_process:
-                logger.error(f"Failed to start LLM service")
-                return False
+    
             if not self._wait_for_service(llm_running_port):
                 logger.error(f"Service failed to start within 600 seconds")
                 llm_process.terminate()
@@ -283,11 +279,13 @@ class LocalLLMManager:
 
             logger.info(f"Service started on port {port} for model: {hash}")
 
-            projector_path = f"{local_model_path}-projector"
+            service_metadata["pid"] =llm_process.pid
+            service_metadata["app_pid"] = apis_process.pid
+            projector_path = f"{local_model_path}-projector"    
             if os.path.exists(projector_path):
                 service_metadata["multimodal"] = True
                 service_metadata["local_projector_path"] = projector_path
-    
+
             self._dump_running_service(service_metadata)    
 
             # update service metadata to the FastAPI app
