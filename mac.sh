@@ -113,7 +113,7 @@ if command_exists llama; then
     log_message "llama.cpp is installed. Checking for updates..."
     if brew outdated | grep -q "llama.cpp"; then
         log_message "Upgrading llama.cpp..."
-        brew upgrade personally.cpp || handle_error $? "Failed to upgrade llama.cpp"
+        brew upgrade llama.cpp || handle_error $? "Failed to upgrade llama.cpp"
         log_message "llama.cpp upgraded successfully."
     else
         log_message "llama.cpp is up to date."
