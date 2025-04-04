@@ -182,7 +182,8 @@ class LocalLLMManager:
                         response_json = response.json()
                         service_metadata["family"] = response_json.get("family", "")
                         folder_name = response_json["folder_name"]
-                        is_gemma3 = True if ("gemma" in folder_name.lower()) else False
+                        is_gemma3 = True if folder_name.startswith("gemma") else False
+                        print("ASDASDASDASDAS", is_gemma3)
                         break
                 except requests.exceptions.RequestException:
                     time.sleep(2)  # Delay between retries
