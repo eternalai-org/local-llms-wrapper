@@ -114,20 +114,25 @@ class ChatCompletionRequest(BaseModel):
 
     def fix_message_order(self) -> None:
         """
-        Ensure that messages alternate between 'user' and 'assistant' roles.
-        If consecutive messages have the same role, insert a dummy message with the opposite role.
-        Tool messages are converted to assistant messages with appropriate formatting.
+        Convert tool messages into a format that can be understood by models without 
+        native tool support. Uses a clear JSON structure that maintains semantic meaning
+        while being easier to parse.
         """
         if not self.messages:
             return
 
-        # Step 1: Process messages and merge tool messages
         fixed_messages = []
         i = 0
         while i < len(self.messages):
             msg = self.messages[i]
+            
             if msg.role == "assistant" and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                # Collect consecutive tool messages
+                # Create base assistant message
+                assistant_content = msg.content or ""
+                if assistant_content:
+                    assistant_content += "\n\n"
+                
+                # Collect tool responses
                 tool_responses = {}
                 j = i + 1
                 while j < len(self.messages) and self.messages[j].role == "tool":
@@ -136,28 +141,28 @@ class ChatCompletionRequest(BaseModel):
                         tool_responses[tool_msg.tool_call_id] = tool_msg.content
                     j += 1
                 
-                # Construct merged content
-                content = msg.content or ""
-                
+                # Format tool calls in a structured, easy-to-parse way
                 for tool_call in msg.tool_calls:
                     tool_call_id = tool_call.id
                     function_name = tool_call.function.get("name", "unknown_function")
                     function_args = tool_call.function.get("arguments", "{}")
                     
-                    # Add tool call in the required format
-                    content += f"\n<tool_call>\n"
-                    content += f'{{"name": "{function_name}", "arguments": {function_args}}}'
-                    content += f"\n</tool_call><|im_end|>\n\n"
+                    # Add function call in clear JSON format
+                    assistant_content += f"I need to call function: {function_name}\n"
+                    assistant_content += f"Function arguments: {function_args}\n"
                     
-                    # Add tool response if available
-                    response = tool_responses.get(tool_call_id, "(pending)")
-                    content += f"<tool_response>\n{response}\n</tool_response><|im_end|>\n"
+                    # Add tool response in a clear format
+                    response = tool_responses.get(tool_call_id, "")
+                    if response:
+                        assistant_content += f"Function result: {response}\n\n"
                 
-                fixed_messages.append(BaseMessage(role="assistant", content=content))
-                i = j  # Skip the tool messages
+                fixed_messages.append(BaseMessage(role="assistant", content=assistant_content))
+                i = j  # Skip processed tool messages
             elif msg.role == "tool":
-                raise ValueError("Stray tool message without preceding assistant message with tool_calls")
+                # Skip orphaned tool messages
+                i += 1
             else:
+                # Keep regular user/assistant messages
                 fixed_messages.append(BaseMessage(role=msg.role, content=msg.content))
                 i += 1
                 
