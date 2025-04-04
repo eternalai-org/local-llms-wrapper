@@ -60,7 +60,7 @@ class ChatCompletionRequest(BaseModel):
     Model for chat completion requests, including messages, streaming option, and tools.
     """
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
-    messages: Optional[Union[List[Message]]
+    messages: Optional[Union[List[Message]]]
     stream: Optional[bool] = False          # Whether to stream the response
     tools: Optional[Any] = None             # Optional list of tools to use
     max_tokens: Optional[int] = None        # Maximum tokens in the response
