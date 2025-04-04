@@ -104,7 +104,7 @@ class ChatCompletionRequest(BaseModel):
             self.messages.pop(0)
             fixed_messages.append(
                 Message(role="system", content="You are a helpful assistant capable of using tools when necessary. Respond in natural language when tools are not required."
-            )
+            ))
         for msg in self.messages:
             fixed_messages.append(msg)
         self.messages = fixed_messages
