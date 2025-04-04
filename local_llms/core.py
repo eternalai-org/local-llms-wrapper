@@ -7,7 +7,9 @@ import requests
 import subprocess
 from pathlib import Path
 from loguru import logger
-from typing import Optional
+from typing import Optional, Dict, Any
+import gc
+import signal
 from local_llms.download import download_model_from_filecoin_async
 
 class LocalLLMManager:
@@ -15,7 +17,48 @@ class LocalLLMManager:
     
     def __init__(self):
         """Initialize the LocalLLMManager."""       
-        self.pickle_file = Path(os.getenv("RUNNING_SERVICE_FILE"))
+        self.pickle_file = Path(os.getenv("RUNNING_SERVICE_FILE", "running_service.pkl"))
+        self.loaded_models: Dict[str, Any] = {}
+        self.idle_timeout = int(os.getenv("LLM_IDLE_TIMEOUT", "1800"))  # Default 30 minutes
+        self.last_activity = time.time()
+        self._initialize_activity_tracker()
+
+    def _initialize_activity_tracker(self):
+        """Initialize a background activity tracker."""
+        signal.signal(signal.SIGUSR1, self._handle_activity_signal)
+        
+        # Start idle checker in a separate thread if needed
+        if self.idle_timeout > 0:
+            import threading
+            self.activity_thread = threading.Thread(target=self._check_idle_status, daemon=True)
+            self.activity_thread.start()
+    
+    def _handle_activity_signal(self, signum, frame):
+        """Handle activity signal to update last activity time."""
+        self.last_activity = time.time()
+        logger.debug("Activity tracker updated")
+    
+    def track_activity(self):
+        """Mark the LLM as active."""
+        self.last_activity = time.time()
+    
+    def _check_idle_status(self):
+        """Background thread to check for idle status."""
+        while True:
+            time.sleep(60)  # Check every minute
+            
+            if not self.pickle_file.exists():
+                continue
+                
+            current_time = time.time()
+            idle_time = current_time - self.last_activity
+            
+            if idle_time > self.idle_timeout:
+                logger.info(f"Model has been idle for {idle_time:.1f} seconds, unloading...")
+                try:
+                    self.unload_model()
+                except Exception as e:
+                    logger.error(f"Error unloading idle model: {str(e)}")
 
     def _wait_for_service(self, port: int, timeout: int = 600) -> bool:
         """
@@ -96,6 +139,10 @@ class LocalLLMManager:
 
         try:
             logger.info(f"Starting local LLM service for model with hash: {hash}")
+            
+            # Reset activity timer when starting a new model
+            self.track_activity()
+            
             local_model_path = asyncio.run(download_model_from_filecoin_async(hash))
             model_running = self.get_running_model()
             if model_running:
@@ -127,6 +174,15 @@ class LocalLLMManager:
                 "--no-webui"
             ]
 
+            # Add memory optimization parameters if defined
+            memory_limit = os.getenv("LLM_MEMORY_LIMIT")
+            if memory_limit:
+                running_llm_command.extend(["--memory-limit", memory_limit])
+                
+            # Add dynamic quantization option if available
+            if os.getenv("LLM_DYNAMIC_QUANT", "false").lower() == "true":
+                running_llm_command.append("--dynamic-quant")
+
             logger.info(f"Starting process: {' '.join(running_llm_command)}")
 
             # Create log files for stdout and stderr for LLM process
@@ -153,7 +209,6 @@ class LocalLLMManager:
                 return False
 
             # start the FastAPI app in the background
-
             uvicorn_command = [
                 "uvicorn",
                 "local_llms.apis:app",
@@ -199,7 +254,8 @@ class LocalLLMManager:
                 "multimodal": False,
                 "local_text_path": local_model_path,
                 "app_port": port,
-                "context_length": context_length
+                "context_length": context_length,
+                "last_activity": time.time()
             }
             projector_path = f"{local_model_path}-projector"
             if os.path.exists(projector_path):
@@ -235,10 +291,32 @@ class LocalLLMManager:
             return False
         
     def _dump_running_service(self, metadata: dict):
-
         """Dump the running service details to a file."""
-        with open("running_service.pkl", "wb") as f:
+        with open(self.pickle_file, "wb") as f:
             pickle.dump(metadata, f)
+            
+    def update_activity(self):
+        """Update the last activity timestamp for the running model."""
+        if not self.pickle_file.exists():
+            return False
+        
+        try:
+            # Load service details
+            with open(self.pickle_file, "rb") as f:
+                service_info = pickle.load(f)
+            
+            # Update timestamp
+            service_info["last_activity"] = time.time()
+            self.track_activity()
+            
+            # Save updated info
+            with open(self.pickle_file, "wb") as f:
+                pickle.dump(service_info, f)
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error updating activity timestamp: {str(e)}")
+            return False
 
     def get_running_model(self) -> Optional[str]:
         """
@@ -260,6 +338,9 @@ class LocalLLMManager:
             llm_port = service_info.get("port")
             context_length = service_info.get("context_length")
             
+            # Update activity timestamp
+            self.track_activity()
+            
             # Check both services with minimal timeout
             llm_healthy = False
             api_healthy = False
@@ -279,6 +360,8 @@ class LocalLLMManager:
                     pass
 
             if llm_healthy and api_healthy:
+                # Update the last activity timestamp whenever we verify a model is running
+                self.update_activity()
                 return model_hash
                 
             logger.warning(f"Service not healthy: LLM {llm_healthy}, API {api_healthy}")
@@ -295,6 +378,102 @@ class LocalLLMManager:
         except Exception as e:
             logger.error(f"Error getting running model: {str(e)}")
             return None
+    
+    def unload_model(self) -> bool:
+        """
+        Unload the model from memory but keep the server running.
+        
+        Returns:
+            bool: True if model was unloaded successfully, False otherwise.
+        """
+        if not self.pickle_file.exists():
+            logger.warning("No running LLM service to unload.")
+            return False
+            
+        try:
+            # Load service details from the pickle file
+            with open(self.pickle_file, "rb") as f:
+                service_info = pickle.load(f)
+                
+            app_port = service_info.get("app_port")
+            
+            # Send unload signal to the API
+            unload_url = f"http://localhost:{app_port}/unload"
+            try:
+                response = requests.post(unload_url, timeout=10)
+                if response.status_code == 200:
+                    logger.info("Model unloaded from memory successfully.")
+                    
+                    # Force garbage collection to free memory
+                    gc.collect()
+                    
+                    # Update pickle file with unloaded state
+                    service_info["unloaded"] = True
+                    with open(self.pickle_file, "wb") as f:
+                        pickle.dump(service_info, f)
+                        
+                    return True
+                else:
+                    logger.error(f"Failed to unload model: {response.text}")
+                    return False
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error unloading model: {str(e)}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error during model unload: {str(e)}")
+            return False
+
+    def reload_model(self) -> bool:
+        """
+        Reload a previously unloaded model.
+        
+        Returns:
+            bool: True if model was reloaded successfully, False otherwise.
+        """
+        if not self.pickle_file.exists():
+            logger.warning("No model service to reload.")
+            return False
+            
+        try:
+            # Load service details
+            with open(self.pickle_file, "rb") as f:
+                service_info = pickle.load(f)
+                
+            if not service_info.get("unloaded", False):
+                logger.info("Model is not unloaded, no need to reload.")
+                return True
+                
+            app_port = service_info.get("app_port")
+            model_path = service_info.get("local_text_path")
+            
+            # Send reload signal to the API
+            reload_url = f"http://localhost:{app_port}/reload"
+            payload = {"model_path": model_path}
+            
+            try:
+                response = requests.post(reload_url, json=payload, timeout=60)
+                if response.status_code == 200:
+                    logger.info("Model reloaded successfully.")
+                    
+                    # Update pickle file with loaded state
+                    service_info["unloaded"] = False
+                    service_info["last_activity"] = time.time()
+                    self.track_activity()
+                    with open(self.pickle_file, "wb") as f:
+                        pickle.dump(service_info, f)
+                        
+                    return True
+                else:
+                    logger.error(f"Failed to reload model: {response.text}")
+                    return False
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error reloading model: {str(e)}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error during model reload: {str(e)}")
+            return False
 
     def stop(self) -> bool:
         """
@@ -303,13 +482,13 @@ class LocalLLMManager:
         Returns:
             bool: True if the service stopped successfully, False otherwise.
         """
-        if not os.path.exists("running_service.pkl"):
+        if not os.path.exists(self.pickle_file):
             logger.warning("No running LLM service to stop.")
             return False
 
         try:
             # Load service details from the pickle file
-            with open("running_service.pkl", "rb") as f:
+            with open(self.pickle_file, "rb") as f:
                 service_info = pickle.load(f)
             
             hash = service_info.get("hash")
@@ -319,6 +498,12 @@ class LocalLLMManager:
 
             logger.info(f"Stopping LLM service '{hash}' running on port {app_port} (PID: {app_pid})...")
 
+            # Trigger unload first to properly release memory
+            try:
+                self.unload_model()
+            except:
+                pass
+                
             # Terminate process by PID
             if psutil.pid_exists(pid):
                 process = psutil.Process(pid)
@@ -335,16 +520,80 @@ class LocalLLMManager:
                 app_process.terminate()
                 app_process.wait(timeout=5)  # Allow process to shut down gracefully
                 
-                if app_process.is_running():  # Force kill if
+                if app_process.is_running():  # Force kill if still alive
                     logger.warning("API process did not terminate, forcing kill.")
                     app_process.kill()
 
+            # Force garbage collection to free memory
+            gc.collect()
+
             # Remove the tracking file
-            os.remove("running_service.pkl")
+            os.remove(self.pickle_file)
             logger.info("LLM service stopped successfully.")
             return True
 
         except Exception as e:
             logger.error(f"Error stopping LLM service: {str(e)}", exc_info=True)
             return False
+
+    def get_memory_usage(self) -> Dict[str, Any]:
+        """
+        Get memory usage statistics for the running model.
+        
+        Returns:
+            Dict[str, Any]: Dictionary with memory usage statistics
+        """
+        if not self.pickle_file.exists():
+            return {"error": "No running model"}
+            
+        try:
+            with open(self.pickle_file, "rb") as f:
+                service_info = pickle.load(f)
+                
+            pid = service_info.get("pid")
+            app_pid = service_info.get("app_pid")
+            
+            result = {
+                "model_hash": service_info.get("hash"),
+                "unloaded": service_info.get("unloaded", False),
+                "processes": {}
+            }
+            
+            # Get memory usage of model server process
+            if psutil.pid_exists(pid):
+                process = psutil.Process(pid)
+                memory_info = process.memory_info()
+                result["processes"]["model_server"] = {
+                    "rss": memory_info.rss,
+                    "rss_mb": memory_info.rss / (1024 * 1024),
+                    "vms": memory_info.vms,
+                    "vms_mb": memory_info.vms / (1024 * 1024)
+                }
+                
+            # Get memory usage of API server process
+            if psutil.pid_exists(app_pid):
+                process = psutil.Process(app_pid)
+                memory_info = process.memory_info()
+                result["processes"]["api_server"] = {
+                    "rss": memory_info.rss,
+                    "rss_mb": memory_info.rss / (1024 * 1024),
+                    "vms": memory_info.vms,
+                    "vms_mb": memory_info.vms / (1024 * 1024)
+                }
+                
+            # Calculate total memory usage
+            total_rss = sum(p.get("rss", 0) for p in result["processes"].values())
+            total_vms = sum(p.get("vms", 0) for p in result["processes"].values())
+            
+            result["total"] = {
+                "rss": total_rss,
+                "rss_mb": total_rss / (1024 * 1024),
+                "vms": total_vms,
+                "vms_mb": total_vms / (1024 * 1024)
+            }
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error getting memory usage: {str(e)}")
+            return {"error": str(e)}
         

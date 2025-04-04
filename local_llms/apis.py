@@ -546,11 +546,7 @@ async def health():
     # Invalidate the service port cache periodically
     get_cached_service_port.cache_clear()
     
-    # Check if the service info is set
-    if not hasattr(app.state, "service_info"):
-        return {"status": "starting", "message": "Service info not set yet"}
-    
-    return {"status": "ok", "service": app.state.service_info.get("family", "unknown")}
+    return {"status": "ok"}
 
 @app.post("/update")
 async def update(request: dict):

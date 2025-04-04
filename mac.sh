@@ -142,10 +142,36 @@ log_message "Virtual environment activated."
 # Step 7: Install local-llms toolkit
 log_message "Setting up local-llms toolkit..."
 if pip show local-llms &>/dev/null; then
-    log_message "local-llms is installed. Updating..."
-    pip uninstall local-llms -y || handle_error $? "Failed to uninstall local-llms"
-    pip install -q git+https://github.com/eternalai-org/local-llms-wrapper.git || handle_error $? "Failed to update local-llms toolkit"
-    log_message "local-llms toolkit updated."
+    log_message "local-llms is installed. Checking for updates..."
+    
+    # Get installed version
+    INSTALLED_VERSION=$(pip show local-llms | grep Version | awk '{print $2}')
+    log_message "Current version: $INSTALLED_VERSION"
+    
+    # Get remote version (from GitHub repository without installing)
+    log_message "Checking latest version from repository..."
+    TEMP_VERSION_FILE=$(mktemp)
+    if curl -s https://raw.githubusercontent.com/eternalai-org/local-llms-wrapper/main/local_llms/__init__.py | grep -o "__version__ = \"[0-9.]*\"" | cut -d'"' -f2 > "$TEMP_VERSION_FILE"; then
+        REMOTE_VERSION=$(cat "$TEMP_VERSION_FILE")
+        rm "$TEMP_VERSION_FILE"
+        
+        log_message "Latest version: $REMOTE_VERSION"
+        
+        # Compare versions
+        if [ "$INSTALLED_VERSION" != "$REMOTE_VERSION" ]; then
+            log_message "New version available. Updating..."
+            pip uninstall local-llms -y || handle_error $? "Failed to uninstall local-llms"
+            pip install -q git+https://github.com/eternalai-org/local-llms-wrapper.git || handle_error $? "Failed to update local-llms toolkit"
+            log_message "local-llms toolkit updated to version $REMOTE_VERSION."
+        else
+            log_message "Already running the latest version. No update needed."
+        fi
+    else
+        log_message "Could not check latest version. Proceeding with update to be safe..."
+        pip uninstall local-llms -y || handle_error $? "Failed to uninstall local-llms"
+        pip install -q git+https://github.com/eternalai-org/local-llms-wrapper.git || handle_error $? "Failed to update local-llms toolkit"
+        log_message "local-llms toolkit updated."
+    fi
 else
     log_message "Installing local-llms toolkit..."
     pip install -q git+https://github.com/eternalai-org/local-llms-wrapper.git || handle_error $? "Failed to install local-llms toolkit"
