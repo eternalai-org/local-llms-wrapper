@@ -660,8 +660,8 @@ async def handle_completion_request(request: ChatCompletionRequest, endpoint: st
     if request.is_vision_request():
         return await ServiceHandler.generate_vision_response(request)
     
-    request.fix_message_order()
-    logger.info(f"Fixed message order: {request.messages}")
+    # request.fix_message_order()
+    # logger.info(f"Fixed message order: {request.messages}")
     return await ServiceHandler.generate_text_response(request)
 
 @app.post("/chat/completions")
