@@ -40,10 +40,6 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 
-class BaseMessage(BaseModel):
-    role: str
-    content: Optional[Union[str, List[Dict[str, str]]]]
-
 class ToolCall(BaseModel):
     """
     Represents a tool call within a chat completion request.
@@ -52,11 +48,9 @@ class ToolCall(BaseModel):
     type: str = Field(..., description="The type of tool call")
     function: Dict[str, str] = Field(..., description="Details of the function to be called")
 
-# Data Models
-class Message(BaseMessage):
-    """
-    Represents a single message in a chat completion request.
-    """
+class Message(BaseModel):
+    role: str
+    content: Optional[Union[str, List[Dict[str, str]]]] = None
     tool_call_id: Optional[str] = None  # ID of the tool call, if this is a tool message
     tool_calls: Optional[List[ToolCall]] = None
     
@@ -66,7 +60,7 @@ class ChatCompletionRequest(BaseModel):
     Model for chat completion requests, including messages, streaming option, and tools.
     """
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
-    messages: Optional[Union[List[Message], List[BaseMessage]]]
+    messages: Optional[Union[List[Message]]
     stream: Optional[bool] = False          # Whether to stream the response
     tools: Optional[Any] = None             # Optional list of tools to use
     max_tokens: Optional[int] = None        # Maximum tokens in the response
@@ -112,59 +106,87 @@ class ChatCompletionRequest(BaseModel):
                     return True
         return False
 
-    def fix_message_order(self) -> None:
-        """
-        Convert tool messages into a format that can be understood by models without 
-        native tool support. Uses a clear JSON structure that maintains semantic meaning
-        while being easier to parse.
-        """
-        if not self.messages:
-            return
+    # def fix_message_order(self) -> None:
+    #     """
+    #     Convert tool messages into a format that can be understood by models without 
+    #     native tool support. Uses a clear JSON structure that maintains semantic meaning
+    #     while being easier to parse.
+    #     """
+    #     if not self.messages:
+    #         return
+        
+    #     if self.messages[-1].role == "assistant":
+    #         raise ValueError("Last message cannot be an assistant message")
 
-        fixed_messages = []
-        i = 0
-        while i < len(self.messages):
-            msg = self.messages[i]
-            
-            if msg.role == "assistant" and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                # Create base assistant message
-                assistant_content = msg.content or ""
-                if assistant_content:
-                    assistant_content += "\n\n"
+    #     fixed_messages = []
+    #     i = 0
+    #     while i < len(self.messages):
+    #         msg = self.messages[i]
+    #         if msg.role != "assistant":
+    #             fixed_messages.append(BaseMessage(role=msg.role, content=msg.content))
+    #             i += 1
+                            
+    #         else:
+    #             j = i
+    #             while self.messages[j].role == "assistant":
+    #                 if hasattr(msg, 'tool_calls') and msg.tool_calls:
+    #                     assistant_content = msg.content or ""
+    #                     if assistant_content:
+    #                         assistant_content += "\n\n"
+    #                     k = j + 1
+    #                     tool_msg = self.messages[j]
+    #                     if tool_msg.role != "tool":
+    #                         raise ValueError("Tool message must follow assistant message when having tool calls")
+    #                     tool_responses = {}
+                        
+    #                 else:
+    #                     fixed_messages.append(BaseMessage(role="assistant", content=msg.content))
+    #                     j += 1
+    #             i = j
                 
-                # Collect tool responses
-                tool_responses = {}
-                j = i + 1
-                while j < len(self.messages) and self.messages[j].role == "tool":
-                    tool_msg = self.messages[j]
-                    if hasattr(tool_msg, 'tool_call_id') and tool_msg.tool_call_id:
-                        tool_responses[tool_msg.tool_call_id] = tool_msg.content
-                    j += 1
                 
-                # Format tool calls in a structured, easy-to-parse way
-                for tool_call in msg.tool_calls:
-                    tool_call_id = tool_call.id
-                    function_name = tool_call.function.get("name", "unknown_function")
-                    function_args = tool_call.function.get("arguments", "{}")
+                
+
+            # if msg.role == "assistant" and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            #     # Create base assistant message
+            #     assistant_content = msg.content or ""
+            #     if assistant_content:
+            #         assistant_content += "\n\n"
+                
+            #     # Collect tool responses
+            #     tool_responses = {}
+            #     j = i + 1
+            #     while j < len(self.messages) and self.messages[j].role == "tool":
+            #         tool_msg = self.messages[j]
+            #         if hasattr(tool_msg, 'tool_call_id') and tool_msg.tool_call_id:
+            #             tool_responses[tool_msg.tool_call_id] = tool_msg.content
+            #         j += 1
+                
+            #     # Format tool calls in a structured, easy-to-parse way
+            #     for tool_call in msg.tool_calls:
+            #         tool_call_id = tool_call.id
+            #         function_name = tool_call.function.get("name", "unknown_function")
+            #         function_args = tool_call.function.get("arguments", "{}")
                     
-                    # Add function call in clear JSON format
-                    assistant_content += f"I need to call function: {function_name}\n"
-                    assistant_content += f"Function arguments: {function_args}\n"
+            #         # Add function call in clear JSON format
+            #         assistant_content += f"I need to call function: {function_name}\n"
+            #         assistant_content += f"Function arguments: {function_args}\n"
                     
-                    # Add tool response in a clear format
-                    response = tool_responses.get(tool_call_id, "")
-                    if response:
-                        assistant_content += f"Function result: {response}\n\n"
+            #         # Add tool response in a clear format
+            #         response = tool_responses.get(tool_call_id, "")
+            #         if response:
+            #             assistant_content += f"Function result: {response}\n\n"
                 
-                fixed_messages.append(BaseMessage(role="assistant", content=assistant_content))
-                i = j  # Skip processed tool messages
-            elif msg.role == "tool":
-                # Skip orphaned tool messages
-                i += 1
-            else:
-                # Keep regular user/assistant messages
-                fixed_messages.append(BaseMessage(role=msg.role, content=msg.content))
-                i += 1
+            #     fixed_messages.append(BaseMessage(role="assistant", content=assistant_content))
+            #     i = j  # Skip processed tool messages
+            # elif msg.role == "tool":
+            #     # Skip orphaned tool messages
+            #     i += 1
+            # else:
+            #     # Keep regular user/assistant messages
+            #     fixed_messages.append(BaseMessage(role=msg.role, content=msg.content))
+            #     i += 1
+
                 
         self.messages = fixed_messages
 
@@ -665,8 +687,8 @@ async def handle_completion_request(request: ChatCompletionRequest, endpoint: st
     if request.is_vision_request():
         return await ServiceHandler.generate_vision_response(request)
     
-    request.fix_message_order()
-    logger.info(f"Fixed message order: {request.messages}")
+    # request.fix_message_order()
+    # logger.info(f"Fixed message order: {request.messages}")
     return await ServiceHandler.generate_text_response(request)
 
 @app.post("/chat/completions")
