@@ -50,7 +50,7 @@ class ChatCompletionRequest(BaseModel):
     Model for chat completion requests, including messages, streaming option, and tools.
     """
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
-    messages: Optional[Union[List[Any]]]
+    messages: Optional[Union[List[Message]]]
     stream: Optional[bool] = False          # Whether to stream the response
     tools: Optional[Any] = None             # Optional list of tools to use
     max_tokens: Optional[int] = None        # Maximum tokens in the response
@@ -86,7 +86,7 @@ class ChatCompletionRequest(BaseModel):
         # Check just the last user message
         return self._check_message_for_image(last_message)
     
-    def _check_message_for_image(self, message: Any) -> bool:
+    def _check_message_for_image(self, message: Message) -> bool:
         """Helper method to check if a message contains an image."""
         content = message.content
         if isinstance(content, list):
