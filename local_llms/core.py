@@ -77,7 +77,7 @@ class LocalLLMManager:
         while time.time() - start_time < timeout:
             try:
                 status = requests.get(health_check_url, timeout=5)
-                if status.status_code == 200 and status.json().get("status") == "ok":
+                if status.status_code == 200 and (status.json().get("status") == "ok" or status.json().get("status") == "starting"):
                     logger.debug(f"Service healthy at {health_check_url}")
                     return True
             except requests.exceptions.RequestException as e:

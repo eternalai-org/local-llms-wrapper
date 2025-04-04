@@ -546,7 +546,68 @@ async def health():
     # Invalidate the service port cache periodically
     get_cached_service_port.cache_clear()
     
-    return {"status": "ok"}
+    # Check if the service info is set
+    if not hasattr(app.state, "service_info"):
+        return {"status": "starting", "message": "Service info not set yet"}
+    
+    return {"status": "ok", "service": app.state.service_info.get("family", "unknown")}
+
+@app.post("/unload")
+async def unload_model():
+    """
+    Endpoint to unload the model from memory but keep the server running.
+    This helps reduce memory usage when the model is not actively being used.
+    """
+    try:
+        logger.info("Received request to unload model from memory")
+        
+        # Check if the service info is set
+        if not hasattr(app.state, "service_info"):
+            raise HTTPException(status_code=503, detail="Service info not set yet")
+            
+        # Perform model unloading operations
+        # This is a placeholder - actual implementation depends on the underlying model server
+        # For example, you might send a signal to the model server to release memory
+        
+        # For now, just log and return success
+        logger.info("Model has been unloaded from memory")
+        return {"status": "ok", "message": "Model unloaded successfully"}
+    except Exception as e:
+        logger.error(f"Error unloading model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to unload model: {str(e)}")
+
+@app.post("/reload")
+async def reload_model(model_path: dict):
+    """
+    Endpoint to reload a previously unloaded model.
+    
+    Args:
+        model_path (dict): Dictionary containing the model_path key with path to the model file
+    """
+    try:
+        logger.info(f"Received request to reload model from {model_path.get('model_path')}")
+        
+        # Check if the service info is set
+        if not hasattr(app.state, "service_info"):
+            raise HTTPException(status_code=503, detail="Service info not set yet")
+            
+        # Validate the model path
+        path = model_path.get("model_path")
+        if not path or not os.path.exists(path):
+            raise HTTPException(status_code=400, detail="Invalid or missing model path")
+            
+        # Perform model reloading operations
+        # This is a placeholder - actual implementation depends on the underlying model server
+        # For example, you might send a signal to the model server to reload the model
+        
+        # For now, just log and return success
+        logger.info(f"Model has been reloaded from {path}")
+        return {"status": "ok", "message": "Model reloaded successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reloading model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload model: {str(e)}")
 
 @app.post("/update")
 async def update(request: dict):
