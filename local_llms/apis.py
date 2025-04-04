@@ -39,34 +39,12 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-
-class BaseMessage(BaseModel):
-    role: str
-    content: Optional[Union[str, List[Dict[str, str]]]]
-
-class ToolCall(BaseModel):
-    """
-    Represents a tool call within a chat completion request.
-    """
-    id: str = Field(..., description="The unique identifier for the tool call")
-    type: str = Field(..., description="The type of tool call")
-    function: Dict[str, str] = Field(..., description="Details of the function to be called")
-
-# Data Models
-class Message(BaseMessage):
-    """
-    Represents a single message in a chat completion request.
-    """
-    tool_call_id: Optional[str] = None  # ID of the tool call, if this is a tool message
-    tool_calls: Optional[List[ToolCall]] = None
-    
-
 class ChatCompletionRequest(BaseModel):
     """
     Model for chat completion requests, including messages, streaming option, and tools.
     """
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
-    messages: Optional[Union[List[Message], List[BaseMessage]]]
+    messages: Optional[Union[List[Any]]]
     stream: Optional[bool] = False          # Whether to stream the response
     tools: Optional[Any] = None             # Optional list of tools to use
     max_tokens: Optional[int] = None        # Maximum tokens in the response
@@ -92,7 +70,7 @@ class ChatCompletionRequest(BaseModel):
             return False
             
         last_message = self.messages[-1]
-        if last_message.role != "user":
+        if last_message.get("role") != "user":
             # Check all messages if the last one is not from user
             for message in self.messages:
                 if self._check_message_for_image(message):
@@ -102,9 +80,9 @@ class ChatCompletionRequest(BaseModel):
         # Check just the last user message
         return self._check_message_for_image(last_message)
     
-    def _check_message_for_image(self, message: Message) -> bool:
+    def _check_message_for_image(self, message: Any) -> bool:
         """Helper method to check if a message contains an image."""
-        content = message.content
+        content = message.get("content")
         if isinstance(content, list):
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "image_url":
@@ -113,61 +91,21 @@ class ChatCompletionRequest(BaseModel):
         return False
 
     def fix_message_order(self) -> None:
-        """
-        Convert tool messages into a format that can be understood by models without 
-        native tool support. Uses a clear JSON structure that maintains semantic meaning
-        while being easier to parse.
-        """
-        if not self.messages:
+        if self.messages:
             return
-
         fixed_messages = []
-        i = 0
-        while i < len(self.messages):
-            msg = self.messages[i]
-            
-            if msg.role == "assistant" and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                # Create base assistant message
-                assistant_content = msg.content or ""
-                if assistant_content:
-                    assistant_content += "\n\n"
-                
-                # Collect tool responses
-                tool_responses = {}
-                j = i + 1
-                while j < len(self.messages) and self.messages[j].role == "tool":
-                    tool_msg = self.messages[j]
-                    if hasattr(tool_msg, 'tool_call_id') and tool_msg.tool_call_id:
-                        tool_responses[tool_msg.tool_call_id] = tool_msg.content
-                    j += 1
-                
-                # Format tool calls in a structured, easy-to-parse way
-                for tool_call in msg.tool_calls:
-                    tool_call_id = tool_call.id
-                    function_name = tool_call.function.get("name", "unknown_function")
-                    function_args = tool_call.function.get("arguments", "{}")
-                    
-                    # Add function call in clear JSON format
-                    assistant_content += f"I need to call function: {function_name}\n"
-                    assistant_content += f"Function arguments: {function_args}\n"
-                    
-                    # Add tool response in a clear format
-                    response = tool_responses.get(tool_call_id, "")
-                    if response:
-                        assistant_content += f"Function result: {response}\n\n"
-                
-                fixed_messages.append(BaseMessage(role="assistant", content=assistant_content))
-                i = j  # Skip processed tool messages
-            elif msg.role == "tool":
-                # Skip orphaned tool messages
-                i += 1
-            else:
-                # Keep regular user/assistant messages
-                fixed_messages.append(BaseMessage(role=msg.role, content=msg.content))
-                i += 1
-                
+        if self.messages[0].get("role") == "system":
+            self.messages.pop(0)
+            fixed_messages.append(
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant capable of using tools when necessary. Respond in natural language when tools are not required."
+                }
+            )
+        for msg in self.messages:
+            fixed_messages.append(msg)
         self.messages = fixed_messages
-
+                
 class EmbeddingRequest(BaseModel):
     """
     Model for embedding requests.
@@ -665,8 +603,8 @@ async def handle_completion_request(request: ChatCompletionRequest, endpoint: st
     if request.is_vision_request():
         return await ServiceHandler.generate_vision_response(request)
     
-    request.fix_message_order()
-    logger.info(f"Fixed message order: {request.messages}")
+    # request.fix_message_order()
+    # logger.info(f"Fixed message order: {request.messages}")
     return await ServiceHandler.generate_text_response(request)
 
 @app.post("/chat/completions")

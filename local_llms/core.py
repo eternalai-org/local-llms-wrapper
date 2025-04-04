@@ -163,17 +163,52 @@ class LocalLLMManager:
 
             llm_running_port = port + 1
 
-            running_llm_command = [
-                llama_server_path,
-                "--jinja",
-                "--model", str(local_model_path),
-                "--port", str(llm_running_port),
-                "--host", host,
-                "-c", str(context_length),
-                "--pooling", "cls",
-                "--no-webui"
-            ]
+            service_metadata = {
+                "hash": hash,
+                "port": llm_running_port,
+                "multimodal": False,
+                "local_text_path": local_model_path,
+                "app_port": port,
+                "context_length": context_length,
+                "last_activity": time.time()
+            }
+            filecoin_url = f"https://gateway.lighthouse.storage/ipfs/{hash}"
+            is_gemma3 = False
+            for attempt in range(3):
+                try:
+                    response = requests.get(filecoin_url, timeout=10)
+                    if response.status_code == 200:
+                        response_json = response.json()
+                        service_metadata["family"] = response_json.get("family", "")
+                        folder_name = response_json["folder_name"]
+                        is_gemma3 = True if ("gemma" in folder_name.lower()) else False
+                        break
+                except requests.exceptions.RequestException:
+                    time.sleep(2)  # Delay between retries
 
+            if is_gemma3:
+                running_llm_command = [
+                    llama_server_path,
+                    "--jinja",
+                    "--model", str(local_model_path),
+                    "--port", str(llm_running_port),
+                    "--host", host,
+                    "-c", str(context_length),
+                    "--pooling", "cls",
+                    "--no-webui",
+                    "--chat-template", "chatml"
+                ]
+            else:
+                running_llm_command = [
+                    llama_server_path,
+                    "--jinja",
+                    "--model", str(local_model_path),
+                    "--port", str(llm_running_port),
+                    "--host", host,
+                    "-c", str(context_length),
+                    "--pooling", "cls",
+                    "--no-webui"
+                ]
             # Add memory optimization parameters if defined
             memory_limit = os.getenv("LLM_MEMORY_LIMIT")
             if memory_limit:
@@ -189,7 +224,7 @@ class LocalLLMManager:
             os.makedirs("logs", exist_ok=True)
             llm_log_stdout = Path(f"logs/llm_stdout_{llm_running_port}.log")
             llm_log_stderr = Path(f"logs/llm_stderr_{llm_running_port}.log")
-            
+            llm_process = None
             try:
                 with open(llm_log_stdout, 'w') as stdout_log, open(llm_log_stderr, 'w') as stderr_log:
                     llm_process = subprocess.Popen(
@@ -202,13 +237,14 @@ class LocalLLMManager:
             except Exception as e:
                 logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
                 return False
-
+    
             if not self._wait_for_service(llm_running_port):
                 logger.error(f"Service failed to start within 600 seconds")
                 llm_process.terminate()
                 return False
 
-            # start the FastAPI app in the background
+
+            # start the FastAPI app in the background           
             uvicorn_command = [
                 "uvicorn",
                 "local_llms.apis:app",
@@ -216,6 +252,7 @@ class LocalLLMManager:
                 "--port", str(port),
                 "--log-level", "info"
             ]
+
 
             logger.info(f"Starting process: {' '.join(uvicorn_command)}")
 
@@ -246,30 +283,12 @@ class LocalLLMManager:
 
             logger.info(f"Service started on port {port} for model: {hash}")
 
-            service_metadata = {
-                "hash": hash,
-                "port": llm_running_port,
-                "pid": llm_process.pid,
-                "app_pid": apis_process.pid,
-                "multimodal": False,
-                "local_text_path": local_model_path,
-                "app_port": port,
-                "context_length": context_length,
-                "last_activity": time.time()
-            }
-            projector_path = f"{local_model_path}-projector"
+            service_metadata["pid"] =llm_process.pid
+            service_metadata["app_pid"] = apis_process.pid
+            projector_path = f"{local_model_path}-projector"    
             if os.path.exists(projector_path):
                 service_metadata["multimodal"] = True
                 service_metadata["local_projector_path"] = projector_path
-                filecoin_url = f"https://gateway.lighthouse.storage/ipfs/{hash}"
-                for attempt in range(3):
-                    try:
-                        response = requests.get(filecoin_url, timeout=10)
-                        if response.status_code == 200:
-                            service_metadata["family"] = response.json().get("family")
-                            break
-                    except requests.exceptions.RequestException:
-                        time.sleep(2)  # Delay between retries
 
             self._dump_running_service(service_metadata)    
 
