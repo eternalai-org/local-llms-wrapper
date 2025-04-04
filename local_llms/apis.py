@@ -44,20 +44,23 @@ class BaseMessage(BaseModel):
     role: str
     content: Optional[Union[str, List[Dict[str, str]]]]
 
+
+class ToolCall(BaseModel):
+    """
+    Represents a tool call within a chat completion request.
+    """
+    id: Optional[str] = None  # ID of the tool call
+    type: str                 # The type of tool call
+    function: Dict[str, str]  # Details of the function to be called
+
 # Data Models
 class Message(BaseMessage):
     """
     Represents a single message in a chat completion request.
     """
     tool_call_id: Optional[str] = None  # ID of the tool call, if this is a tool message
+    tool_calls: Optional[List[ToolCall]] = None
     
-
-class ToolCall(BaseModel):
-    """
-    Represents a tool call within a chat completion request.
-    """
-    type: str             # The type of tool call
-    function: Dict[str, str]  # Details of the function to be called
 
 class ChatCompletionRequest(BaseModel):
     """
@@ -129,18 +132,39 @@ class ChatCompletionRequest(BaseModel):
                     raise ValueError("Tool messages must follow an assistant message")
                 
                 # Get content from both messages
-                assistant_content = prev_message.content if prev_message.content is not None else ""
+                tool_calls = prev_message.tool_calls if prev_message.tool_calls is not None else []
                 tool_content = msg.content
                 tool_call_id = msg.tool_call_id or "unknown"
                 
-                # Format the new content to include both the assistant's message and the tool response
-                merged_content = f"{assistant_content}\n\nFunction response ({tool_call_id}):\n{tool_content}"
+                content = ""
+                # Find matching tool call
+                matching_tool_call = None
+                for tool_call in tool_calls:
+                    if tool_call_id != "unknown" and hasattr(tool_call, "id") and tool_call.id == tool_call_id:
+                        matching_tool_call = tool_call
+                        break
+                
+                # If no specific match found but we have tool calls, use the first one
+                if matching_tool_call is None and tool_calls:
+                    matching_tool_call = tool_calls[0]
+                
+                if matching_tool_call:
+                    # Format using the required format with tool_call and tool_response tags
+                    content += "<tool_call>\n"
+                    function_name = matching_tool_call.function.get("name", "unknown_function")
+                    function_args = matching_tool_call.function.get("arguments", "{}")
+                    content += f'{{"name": "{function_name}", "arguments": {function_args}}}'
+                    content += "\n</tool_call><|im_end|>\n\n"
+                    content += f"<tool_response>\n{tool_content}\n</tool_response><|im_end|>\n"
+                else:
+                    # Fallback if no tool call found
+                    content = f"<tool_response>\n{tool_content}\n</tool_response><|im_end|>\n"
                 
                 # Remove the previous assistant message and add the merged one
                 fixed_messages.pop()  # Remove the last assistant message
                 fixed_messages.append(BaseMessage(
                     role="assistant",
-                    content=merged_content
+                    content=content
                 ))
             else:
                 fixed_messages.append(BaseMessage(
