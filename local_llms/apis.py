@@ -4,13 +4,19 @@ forwarding them to an underlying service running on a local port. It handles bot
 as well as embedding generation, with support for streaming responses.
 """
 
+import os
 import logging
 import httpx
 import asyncio
-from fastapi import FastAPI, HTTPException, Request
+import base64
+import tempfile
+import functools
+from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, validator
-from typing import List, Dict, Optional, Union, Any
+from typing import List, Dict, Optional, Union, Any, Callable
+from functools import lru_cache
+import time
 
 # Configuration
 class Config:
@@ -20,9 +26,15 @@ class Config:
     TEXT_MODEL = "gpt-4-turbo"          # Default model for text-based chat completions
     VISION_MODEL = "gpt-4-vision-preview"  # Model used for vision-based requests
     EMBEDDING_MODEL = "text-embedding-ada-002"  # Model used for generating embeddings
+    HTTP_TIMEOUT = 60.0                 # Default timeout for HTTP requests in seconds
+    CACHE_TTL = 300                     # Cache time-to-live in seconds (5 minutes)
+    MAX_RETRIES = 3                     # Maximum number of retries for HTTP requests
+    POOL_CONNECTIONS = 100              # Maximum number of connections in the pool
+    POOL_KEEPALIVE = 20                 # Keep connections alive for 20 seconds
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, 
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -34,6 +46,7 @@ class Message(BaseModel):
     """
     role: str      # The role of the message sender (e.g., 'user', 'assistant')
     content: Optional[Union[str, List[Dict[str, str]]]]  # The content of the message
+    tool_call_id: Optional[str] = None  # ID of the tool call, if this is a tool message
 
 class ToolCall(BaseModel):
     """
@@ -49,7 +62,10 @@ class ChatCompletionRequest(BaseModel):
     model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
     messages: List[Message]                 # List of messages in the chat
     stream: Optional[bool] = False          # Whether to stream the response
-    tools: Optional[Any] = None # Optional list of tools to use
+    tools: Optional[Any] = None             # Optional list of tools to use
+    max_tokens: Optional[int] = None        # Maximum tokens in the response
+    temperature: Optional[float] = None     # Temperature for sampling
+    top_p: Optional[float] = None           # Top p for nucleus sampling
 
     @validator("messages")
     def check_messages_not_empty(cls, v):
@@ -65,39 +81,67 @@ class ChatCompletionRequest(BaseModel):
         Check if the request includes image content, indicating a vision-based request.
         If so, switch the model to the vision model.
         """
-        for message in self.messages:
-            content = message.content
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "image_url":
-                        self.model = Config.VISION_MODEL    
-                        return True        
+        # Early optimization - only check the last message from the user
+        if not self.messages:
+            return False
+            
+        last_message = self.messages[-1]
+        if last_message.role != "user":
+            # Check all messages if the last one is not from user
+            for message in self.messages:
+                if self._check_message_for_image(message):
+                    return True
+            return False
+            
+        # Check just the last user message
+        return self._check_message_for_image(last_message)
+    
+    def _check_message_for_image(self, message: Message) -> bool:
+        """Helper method to check if a message contains an image."""
+        content = message.content
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "image_url":
+                    self.model = Config.VISION_MODEL    
+                    return True
         return False
 
     def fix_message_order(self) -> None:
         """
         Ensure that messages alternate between 'user' and 'assistant' roles.
         If consecutive messages have the same role, insert a dummy message with the opposite role.
+        Tool messages are converted to assistant messages with appropriate formatting.
         """
         if not self.messages:
             return
             
         fixed_messages = []
-        last_role = None
+        prev_message = None
         
         for msg in self.messages:
-            role = msg.role.strip()
-            content = msg.content or " "
-            
-            # Insert opposite role if needed
-            if (last_role in ("user", "assistant")) and role == last_role:
+            # Handle tool messages by merging them with the previous assistant message
+            if msg.role == "tool":
+                if prev_message is None or prev_message.role != "assistant":
+                    raise ValueError("Tool messages must follow an assistant message")
+                
+                # Get content from both messages
+                assistant_content = prev_message.content if prev_message.content is not None else ""
+                tool_content = msg.content
+                tool_call_id = msg.tool_call_id or "unknown"
+                
+                # Format the new content to include both the assistant's message and the tool response
+                merged_content = f"{assistant_content}\n\nFunction response ({tool_call_id}):\n{tool_content}"
+                
+                # Remove the previous assistant message and add the merged one
+                fixed_messages.pop()  # Remove the last assistant message
                 fixed_messages.append(Message(
-                    role="assistant" if last_role == "user" else "user",
-                    content=" "
+                    role="assistant",
+                    content=merged_content
                 ))
+            else:
+                fixed_messages.append(msg)
             
-            fixed_messages.append(Message(role=role, content=content))
-            last_role = role
+            prev_message = msg
             
         self.messages = fixed_messages
 
@@ -107,6 +151,25 @@ class EmbeddingRequest(BaseModel):
     """
     model: str = Config.EMBEDDING_MODEL     # Model to use, defaults to embedding model
     input: List[str] = Field(..., description="List of text inputs for embedding")  # Text inputs to embed
+    
+    @validator("input")
+    def check_input_not_empty(cls, v):
+        """Ensure the input list is not empty."""
+        if not v:
+            raise ValueError("input list cannot be empty")
+        return v
+
+# Cache for service port to avoid repeated lookups
+@lru_cache(maxsize=1)
+def get_cached_service_port():
+    """
+    Retrieve the port of the underlying service from the app's state with caching.
+    The cache is invalidated when the service info is updated.
+    """
+    if not hasattr(app.state, "service_info") or "port" not in app.state.service_info:
+        logger.error("Service information not set")
+        raise HTTPException(status_code=503, detail="Service information not set")
+    return app.state.service_info["port"]
 
 # Service Functions
 class ServiceHandler:
@@ -118,10 +181,14 @@ class ServiceHandler:
         """
         Retrieve the port of the underlying service from the app's state.
         """
-        if not hasattr(app.state, "service_info") or "port" not in app.state.service_info:
-            logger.error("Service information not set")
-            raise HTTPException(status_code=503, detail="Service information not set")
-        return app.state.service_info["port"]
+        try:
+            return get_cached_service_port()
+        except HTTPException:
+            # If cache lookup fails, try direct lookup
+            if not hasattr(app.state, "service_info") or "port" not in app.state.service_info:
+                logger.error("Service information not set")
+                raise HTTPException(status_code=503, detail="Service information not set")
+            return app.state.service_info["port"]
     
     @staticmethod
     async def generate_text_response(request: ChatCompletionRequest):
@@ -157,8 +224,14 @@ class ServiceHandler:
         # Retrieve configuration values
         family = app.state.service_info["family"]
         cli = os.getenv(family)
-        local_text_path = app.state.service_info["local_text_path"]
-        local_projector_path = app.state.service_info["local_projector_path"]
+        if not cli:
+            raise HTTPException(status_code=500, detail=f"CLI environment variable '{family}' not set")
+            
+        local_text_path = app.state.service_info.get("local_text_path")
+        local_projector_path = app.state.service_info.get("local_projector_path")
+        
+        if not local_text_path or not local_projector_path:
+            raise HTTPException(status_code=500, detail="Model paths not properly configured")
 
         # Enforce a single message
         if len(request.messages) != 1:
@@ -166,8 +239,12 @@ class ServiceHandler:
 
         # Process the content of the single message
         content = request.messages[0].content
+        if not isinstance(content, list):
+            raise HTTPException(status_code=400, detail="Vision content must be a list")
+
         text = None
         image_url = None
+        image_path = None
 
         # Extract exactly one text and one image_url from the content list
         for item in content:
@@ -183,47 +260,25 @@ class ServiceHandler:
                     raise HTTPException(status_code=400, detail="Only one image is allowed in vision-based requests")
                 image_url = item.get("image_url", {}).get("url")
             else:
-                raise HTTPException(status_code=400, detail="Invalid content type in vision-based request")
+                raise HTTPException(status_code=400, detail=f"Invalid content type '{item_type}' in vision-based request")
 
         # Validate that both text and image_url are present
         if text is None or image_url is None:
             raise HTTPException(status_code=400, detail="Vision-based requests must include one text prompt and one image")
 
-        # Handle the image_url: base64 or URL
-        if image_url.startswith("data:image/"):
-            # Base64-encoded image
-            try:
-                header, encoded = image_url.split(",", 1)
-                data = base64.b64decode(encoded)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-                    temp_file.write(data)
-                    image_path = temp_file.name
-            except Exception as e:
-                raise HTTPException(status_code=400, detail="Invalid base64 image data")
-        else:
-            # Regular URL
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(image_url)
-                    if response.status_code != 200:
-                        raise HTTPException(status_code=400, detail="Failed to download image")
-                    data = response.content
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-                        temp_file.write(data)
-                        image_path = temp_file.name
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Failed to download image: {str(e)}")
-
-        # Construct and execute the command
-        command = [
-            cli,
-            "--model", local_text_path,
-            "--mmproj", local_projector_path,
-            "--image", image_path,
-            "--prompt", text
-        ]
-
         try:
+            # Handle the image_url: base64 or URL
+            image_path = await ServiceHandler._process_image(image_url)
+            
+            # Construct and execute the command
+            command = [
+                cli,
+                "--model", local_text_path,
+                "--mmproj", local_projector_path,
+                "--image", image_path,
+                "--prompt", text
+            ]
+
             proc = await asyncio.create_subprocess_exec(
                 *command,
                 stdout=asyncio.subprocess.PIPE,
@@ -237,10 +292,51 @@ class ServiceHandler:
 
             response = stdout.decode().strip()
             return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Vision processing error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Vision processing error: {str(e)}")
         finally:
             # Clean up the temporary file
-            if os.path.exists(image_path):
-                os.remove(image_path)
+            if image_path and os.path.exists(image_path):
+                try:
+                    os.remove(image_path)
+                except Exception as e:
+                    logger.warning(f"Failed to remove temporary file {image_path}: {str(e)}")
+    
+    @staticmethod
+    async def _process_image(image_url: str) -> str:
+        """
+        Process the image URL or base64 data and return the path to the saved image.
+        """
+        if image_url.startswith("data:image/"):
+            # Base64-encoded image
+            try:
+                header, encoded = image_url.split(",", 1)
+                data = base64.b64decode(encoded)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
+                    temp_file.write(data)
+                    return temp_file.name
+            except Exception as e:
+                logger.error(f"Failed to process base64 image: {str(e)}")
+                raise HTTPException(status_code=400, detail="Invalid base64 image data")
+        else:
+            # Regular URL
+            try:
+                async with httpx.AsyncClient(timeout=Config.HTTP_TIMEOUT) as client:
+                    response = await client.get(image_url)
+                    if response.status_code != 200:
+                        raise HTTPException(status_code=400, detail=f"Failed to download image: HTTP {response.status_code}")
+                    data = response.content
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
+                        temp_file.write(data)
+                        return temp_file.name
+            except httpx.TimeoutException:
+                raise HTTPException(status_code=504, detail="Timeout while downloading image")
+            except Exception as e:
+                logger.error(f"Failed to download image: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Failed to download image: {str(e)}")
     
     @staticmethod
     async def generate_embeddings_response(request: EmbeddingRequest):
@@ -248,32 +344,57 @@ class ServiceHandler:
         Generate a response for embedding requests.
         """
         port = await ServiceHandler.get_service_port()
-        return await ServiceHandler._make_api_call(port, "/v1/embeddings", request.dict())
-        
+        # Convert to dict, supporting both Pydantic v1 and v2
+        request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+        return await ServiceHandler._make_api_call(port, "/v1/embeddings", request_dict)
     
     @staticmethod
-    async def _make_api_call(port: int, endpoint: str, data: dict) -> dict:
+    async def _make_api_call(port: int, endpoint: str, data: dict, retries: int = Config.MAX_RETRIES) -> dict:
         """
         Make a non-streaming API call to the specified endpoint and return the JSON response.
+        Includes retry logic for transient errors.
         """
-        try:
-            logger.info(f"Making API call to endpoint: {endpoint}")
-            response = await app.state.client.post(
-                f"http://localhost:{port}{endpoint}", 
-                json=data,
-                timeout=None  # Wait indefinitely for a response
-            )
-            logger.info(f"Received response with status code: {response.status_code}")
-
-            
-            if response.status_code != 200:
-                logger.error(f"Error: {response.status_code} - {response.text}")
-                raise HTTPException(status_code=response.status_code, detail=response.text)
+        attempts = 0
+        last_exception = None
+        
+        while attempts < retries:
+            try:
+                logger.info(f"Making API call to endpoint: {endpoint} (attempt {attempts+1}/{retries})")
+                response = await app.state.client.post(
+                    f"http://localhost:{port}{endpoint}", 
+                    json=data,
+                    timeout=Config.HTTP_TIMEOUT
+                )
+                logger.info(f"Received response with status code: {response.status_code}")
                 
-            return response.json()
-        except Exception as e:
-            logger.error(f"API call error: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
+                if response.status_code != 200:
+                    error_text = response.text
+                    logger.error(f"Error: {response.status_code} - {error_text}")
+                    # Don't retry client errors (4xx), only server errors (5xx)
+                    if response.status_code < 500:
+                        raise HTTPException(status_code=response.status_code, detail=error_text)
+                    last_exception = HTTPException(status_code=response.status_code, detail=error_text)
+                else:
+                    return response.json()
+            except httpx.TimeoutException as e:
+                logger.warning(f"Timeout during API call (attempt {attempts+1}/{retries}): {str(e)}")
+                last_exception = HTTPException(status_code=504, detail="Gateway Timeout")
+            except Exception as e:
+                logger.error(f"API call error (attempt {attempts+1}/{retries}): {str(e)}")
+                last_exception = HTTPException(status_code=500, detail=str(e))
+            
+            # Exponential backoff with jitter
+            if attempts < retries - 1:  # Don't sleep after the last attempt
+                sleep_time = (2 ** attempts) + (0.1 * random.random())
+                await asyncio.sleep(sleep_time)
+            
+            attempts += 1
+        
+        # If we get here, all retries failed
+        logger.error(f"All {retries} API call attempts failed")
+        if last_exception:
+            raise last_exception
+        raise HTTPException(status_code=500, detail="Unknown error during API call")
     
     @staticmethod
     async def _stream_generator(port: int, data: dict):
@@ -285,11 +406,13 @@ class ServiceHandler:
             async with app.state.client.stream(
                 "POST", 
                 f"http://localhost:{port}/v1/chat/completions", 
-                json=data
+                json=data,
+                timeout=None  # Streaming needs indefinite timeout
             ) as response:
                 if response.status_code != 200:
-                    error_msg = f"data: Error: {response.status_code} - {await response.text()}\n\n"
-                    logger.error(f"Streaming error: {response.status_code} - {await response.text()}")
+                    error_text = await response.text()
+                    error_msg = f"data: {{\"error\":{{\"message\":\"{error_text}\",\"code\":{response.status_code}}}}}\n\n"
+                    logger.error(f"Streaming error: {response.status_code} - {error_text}")
                     yield error_msg
                     return
                     
@@ -298,13 +421,12 @@ class ServiceHandler:
                         yield f"{line}\n\n"
         except Exception as e:
             logger.error(f"Error during streaming: {e}")
-            yield f"data: Error: {str(e)}\n\n"
+            yield f"data: {{\"error\":{{\"message\":\"{str(e)}\",\"code\":500}}}}\n\n"
 
 # Request Processor
 class RequestProcessor:
     """
     Class for processing requests asynchronously using a queue.
-    Currently not utilized in the provided endpoints, possibly intended for future use.
     """
     queue = asyncio.Queue()  # Queue for asynchronous request processing
     endpoint_handlers = {
@@ -314,12 +436,21 @@ class RequestProcessor:
         "/embeddings": (EmbeddingRequest, ServiceHandler.generate_embeddings_response),
     }  # Mapping of endpoints to their request models and handlers
     
+    @staticmethod
+    async def process_request(endpoint: str, request_data: dict):
+        """
+        Process a request asynchronously by adding it to the queue.
+        Returns a Future that will be resolved with the result.
+        """
+        future = asyncio.Future()
+        await RequestProcessor.queue.put((endpoint, request_data, future))
+        return await future
+    
     # Global worker function
     @staticmethod
     async def worker():
         """
         Worker function to process requests from the queue asynchronously.
-        Currently not actively used in the provided code.
         """
         while True:
             try:
@@ -332,15 +463,39 @@ class RequestProcessor:
                         result = await handler(request_obj)
                         future.set_result(result)
                     except Exception as e:
+                        logger.error(f"Handler error for {endpoint}: {str(e)}")
                         future.set_exception(e)
                 else:
+                    logger.error(f"Endpoint not found: {endpoint}")
                     future.set_exception(HTTPException(status_code=404, detail="Endpoint not found"))
                 
                 RequestProcessor.queue.task_done()
             except asyncio.CancelledError:
+                logger.info("Worker task cancelled, exiting")
                 break  # Exit the loop when the task is canceled
             except Exception as e:
                 logger.error(f"Worker error: {str(e)}")
+                # Continue working, don't crash the worker
+
+# Performance monitoring middleware
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    """
+    Middleware that adds a header with the processing time for the request.
+    """
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    return response
+
+# Dependencies
+async def get_background_tasks():
+    """Dependency to get background tasks."""
+    return BackgroundTasks()
+
+# Import random here to avoid moving it up (where it might not be needed for all code paths)
+import random
 
 # Lifecycle Events
 @app.on_event("startup")
@@ -348,39 +503,54 @@ async def startup_event():
     """
     Startup event handler: initialize the HTTP client and start the worker task.
     """
-    app.state.client = httpx.AsyncClient()  # Create an asynchronous HTTP client
-    app.state.worker_task = asyncio.create_task(RequestProcessor.worker())  # Start the worker
+    # Create an asynchronous HTTP client with connection pooling
+    limits = httpx.Limits(
+        max_connections=Config.POOL_CONNECTIONS,
+        max_keepalive_connections=Config.POOL_CONNECTIONS
+    )
+    app.state.client = httpx.AsyncClient(limits=limits, timeout=Config.HTTP_TIMEOUT)
+    
+    # Start the worker
+    app.state.worker_task = asyncio.create_task(RequestProcessor.worker())
+    logger.info("Service started successfully")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """
     Shutdown event handler: close the HTTP client and cancel the worker task.
     """
-    await app.state.client.aclose()  # Close the HTTP client
+    logger.info("Shutting down service")
+    
+    # Close the HTTP client
+    if hasattr(app.state, "client"):
+        await app.state.client.aclose()
+    
+    # Cancel the worker task
     if hasattr(app.state, "worker_task"):
         app.state.worker_task.cancel()
         try:
             await app.state.worker_task  # Wait for the worker to finish
         except asyncio.CancelledError:
             pass  # Handle cancellation gracefully
+    
+    logger.info("Service shutdown complete")
 
 # API Endpoints
 @app.get("/health")
-async def health():
-    """
-    Health check endpoint.
-    Returns a simple status to indicate the service is running.
-    """
-    return {"status": "ok"}
-
-# API Endpoints
 @app.get("/v1/health")
 async def health():
     """
     Health check endpoint.
     Returns a simple status to indicate the service is running.
     """
-    return {"status": "ok"}
+    # Invalidate the service port cache periodically
+    get_cached_service_port.cache_clear()
+    
+    # Check if the service info is set
+    if not hasattr(app.state, "service_info"):
+        return {"status": "starting", "message": "Service info not set yet"}
+    
+    return {"status": "ok", "service": app.state.service_info.get("family", "unknown")}
 
 @app.post("/update")
 async def update(request: dict):
@@ -389,7 +559,32 @@ async def update(request: dict):
     Stores the provided request data for use in determining the service port.
     """
     app.state.service_info = request
-    return {"status": "ok"}
+    # Invalidate the cache when service info is updated
+    get_cached_service_port.cache_clear()
+    logger.info(f"Updated service info: {request.get('family', 'unknown')} on port {request.get('port', 'unknown')}")
+    return {"status": "ok", "message": "Service info updated successfully"}
+
+# Add background task handling
+async def handle_request_in_background(background_tasks: BackgroundTasks, endpoint: str, request_data: dict):
+    """Handle a request in the background."""
+    try:
+        return await RequestProcessor.process_request(endpoint, request_data)
+    except Exception as e:
+        logger.error(f"Background task error: {str(e)}")
+        raise
+
+# Combined endpoint handler function
+async def handle_completion_request(request: ChatCompletionRequest, endpoint: str):
+    """
+    Common handler for chat completion requests.
+    """
+    logger.info(f"Received chat completion request for model: {request.model}")
+    
+    if request.is_vision_request():
+        return await ServiceHandler.generate_vision_response(request)
+    
+    request.fix_message_order()
+    return await ServiceHandler.generate_text_response(request)
 
 @app.post("/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
@@ -397,11 +592,7 @@ async def chat_completions(request: ChatCompletionRequest):
     Endpoint for chat completion requests.
     Processes the request, checks for vision content, fixes message order, and generates the response.
     """
-    logger.info(f"Received chat completion request: {request}")
-    if not request.is_vision_request():  # Updates model if vision content is detected
-        request.fix_message_order()   # Ensures proper user-assistant alternation
-        return await ServiceHandler.generate_text_response(request)
-    return await ServiceHandler.generate_vision_response(request)
+    return await handle_completion_request(request, "/chat/completions")
 
 @app.post("/embeddings")
 async def embeddings(request: EmbeddingRequest):
@@ -412,22 +603,15 @@ async def embeddings(request: EmbeddingRequest):
     return await ServiceHandler.generate_embeddings_response(request)
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def v1_chat_completions(request: ChatCompletionRequest):
     """
-    Endpoint for chat completion requests.
-    Processes the request, checks for vision content, fixes message order, and generates the response.
+    Endpoint for chat completion requests (v1 API).
     """
-    logger.info(f"Received chat completion request: {request}")
-    if not request.is_vision_request():  # Updates model if vision content is detected
-        request.fix_message_order()   # Ensures proper user-assistant alternation
-        return await ServiceHandler.generate_text_response(request)
-    return await ServiceHandler.generate_vision_response(request)
-
+    return await handle_completion_request(request, "/v1/chat/completions")
 
 @app.post("/v1/embeddings")
-async def embeddings(request: EmbeddingRequest):
+async def v1_embeddings(request: EmbeddingRequest):
     """
-    Endpoint for embedding requests.
-    Generates embeddings using the specified model.
+    Endpoint for embedding requests (v1 API).
     """
     return await ServiceHandler.generate_embeddings_response(request)
