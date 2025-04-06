@@ -78,9 +78,18 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
             print(f"Error checking existing file {cid}: {e}")
             file_path.unlink(missing_ok=True)
 
-    # Clean up any temporary file from previous attempts
+    # Check if we have a partial download to resume
+    resume_position = 0
     if temp_path.exists():
-        temp_path.unlink(missing_ok=True)
+        try:
+            temp_size = temp_path.stat().st_size
+            if temp_size > 0:
+                resume_position = temp_size
+                print(f"Resuming download of {file_name} from position {resume_position}")
+        except Exception as e:
+            print(f"Error checking temporary file {cid}: {e}")
+            temp_path.unlink(missing_ok=True)
+            resume_position = 0
 
     while attempts < max_attempts:
         try:
@@ -89,12 +98,32 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
             # Use a larger chunk size for faster downloads
             chunk_size = 1024 * 1024  # 1MB chunks
             
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as response:
-                if response.status == 200:
+            # Set up headers for resume if needed
+            headers = {}
+            if resume_position > 0:
+                headers['Range'] = f'bytes={resume_position}-'
+            
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=120)) as response:
+                if response.status in (200, 206):
+                    # Get total size accounting for resumed downloads
                     total_size = int(response.headers.get("content-length", 0))
+                    if response.status == 206:
+                        # For partial content, content-length is the remaining bytes
+                        content_range = response.headers.get("content-range", "")
+                        if content_range:
+                            try:
+                                # Format is usually "bytes start-end/total"
+                                total_size = int(content_range.split("/")[1]) 
+                            except (IndexError, ValueError):
+                                # If parsing fails, use resume_position + content-length
+                                total_size += resume_position
                     
-                    with temp_path.open("wb") as f, tqdm(
+                    # Open file in append mode if resuming, otherwise in write mode
+                    mode = "ab" if resume_position > 0 else "wb"
+                    
+                    with temp_path.open(mode) as f, tqdm(
                         total=total_size,
+                        initial=resume_position,
                         unit="B",
                         unit_scale=True,
                         desc=f"Downloading {file_name}",
@@ -115,7 +144,9 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                         return file_path, None
                     else:
                         print(f"Hash mismatch for {cid}. Expected {expected_hash}, got {computed_hash}.")
-                        temp_path.unlink(missing_ok=True)
+                        # Don't delete temp file on hash mismatch, it may be corrupted but we can resume
+                        # Just reset resume position to 0 to start over on next attempt
+                        resume_position = 0
                 else:
                     print(f"Failed to download {cid}. Status: {response.status}")
                     # For certain status codes, we might want to fail faster
@@ -133,10 +164,6 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
         except Exception as e:
             print(f"Exception downloading {cid}: {e}")
             wait_time = min(SLEEP_TIME * (2 ** attempts), 300)
-        finally:
-            # Clean up temp file on failure
-            if temp_path.exists() and not file_path.exists():
-                temp_path.unlink(missing_ok=True)
 
         attempts += 1
         if attempts < max_attempts:
@@ -144,6 +171,7 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
             await asyncio.sleep(wait_time)
         else:
             print(f"Failed to download {cid} after {max_attempts} attempts.")
+            # On final failure, leave the temp file for potential future resume
             return None, f"Failed to download {cid} after {max_attempts} attempts."
 
 async def download_files_from_lighthouse_async(data: dict) -> list:
@@ -167,7 +195,7 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     total_files = len(files)
     
     # Use semaphore to limit concurrent downloads
-    max_concurrent_downloads = min(os.cpu_count() * 2, 2)
+    max_concurrent_downloads = min(os.cpu_count() * 2, 8)
     semaphore = asyncio.Semaphore(max_concurrent_downloads)
     
     # Wrapper for download with semaphore
