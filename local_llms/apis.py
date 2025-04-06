@@ -553,10 +553,9 @@ async def handle_completion_request(request: ChatCompletionRequest, endpoint: st
     logger.info(f"Received chat completion request for model: {request.model}")
     
     if request.is_vision_request():
-        return await ServiceHandler.generate_vision_response(request)
-    
-    # request.fix_message_order()
-    # logger.info(f"Fixed message order: {request.messages}")
+        raise HTTPException(status_code=400, detail="Vision-based requests are not supported")
+        # return await ServiceHandler.generate_vision_response(request)
+        
     return await ServiceHandler.generate_text_response(request)
 
 @app.post("/chat/completions")
