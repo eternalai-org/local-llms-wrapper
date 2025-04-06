@@ -6,6 +6,7 @@ import pickle
 from tqdm import tqdm
 from pathlib import Path
 from local_llms.utils import compute_file_hash, async_extract_zip, async_move, async_rmtree
+import random
 
 # Constants
 GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
@@ -103,7 +104,10 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
             if resume_position > 0:
                 headers['Range'] = f'bytes={resume_position}-'
             
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=120)) as response:
+            # Use a longer timeout for large files
+            timeout = aiohttp.ClientTimeout(total=300, connect=60, sock_read=120, sock_connect=60)
+            
+            async with session.get(url, headers=headers, timeout=timeout) as response:
                 if response.status in (200, 206):
                     # Get total size accounting for resumed downloads
                     total_size = int(response.headers.get("content-length", 0))
@@ -121,6 +125,7 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                     # Open file in append mode if resuming, otherwise in write mode
                     mode = "ab" if resume_position > 0 else "wb"
                     
+                    # Prepare progress bar
                     with temp_path.open(mode) as f, tqdm(
                         total=total_size,
                         initial=resume_position,
@@ -129,9 +134,28 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                         desc=f"Downloading {file_name}",
                         ncols=80
                     ) as progress:
+                        # Add timeout protection for each chunk
+                        last_data_time = asyncio.get_event_loop().time()
+                        chunk_timeout = 60  # 60 seconds without data is a timeout
+                        
+                        # Downloading with per-chunk timeout protection
                         async for chunk in response.content.iter_chunked(chunk_size):
+                            # Reset timeout timer when data is received
+                            last_data_time = asyncio.get_event_loop().time()
+                            
+                            # Write chunk and update progress
                             f.write(chunk)
                             progress.update(len(chunk))
+                            
+                            # Regularly flush to disk to avoid data loss
+                            if random.random() < 0.1:  # ~10% of chunks
+                                f.flush()
+                                os.fsync(f.fileno())
+                            
+                            # Check if download has been idle
+                            current_time = asyncio.get_event_loop().time()
+                            if current_time - last_data_time > chunk_timeout:
+                                raise asyncio.TimeoutError(f"No data received for {chunk_timeout} seconds")
 
                     # Verify hash
                     computed_hash = compute_file_hash(temp_path)
@@ -156,7 +180,8 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                         wait_time = min(SLEEP_TIME * (2 ** attempts), 300)
             
         except asyncio.TimeoutError:
-            print(f"Timeout downloading {cid}")
+            print(f"Timeout downloading {cid} - will resume from position {resume_position}")
+            # On timeout, don't reset resume position - we'll keep what we have
             wait_time = min(SLEEP_TIME * (2 ** attempts), 300)
         except aiohttp.ClientError as e:
             print(f"Client error downloading {cid}: {e}")
@@ -204,7 +229,7 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
             return await download_single_file_async(session, file_info, folder_path)
     
     connector = aiohttp.TCPConnector(limit=max_concurrent_downloads, ssl=False)
-    timeout = aiohttp.ClientTimeout(total=None, connect=60, sock_connect=60, sock_read=60)
+    timeout = aiohttp.ClientTimeout(total=None, connect=60, sock_connect=60, sock_read=120)
     
     print(f"Downloading {total_files} files with max {max_concurrent_downloads} concurrent downloads")
     
