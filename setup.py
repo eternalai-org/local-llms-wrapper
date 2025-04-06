@@ -12,18 +12,20 @@ setup(
     },
     include_package_data=True,
     install_requires=[
-        "requests",
-        "tqdm",
-        "loguru",
-        "psutil",
-        "httpx",
-        "loguru",
-        "lighthouseweb3",
-        "python-dotenv",
-        "fastapi",
-        "uvicorn",
-        "aiohttp",
-        "setuptools"
+        "requests>=2.28.0",
+        "tqdm>=4.64.0",
+        "loguru>=0.6.0",
+        "psutil>=5.9.0",
+        "httpx>=0.23.0",
+        "lighthouseweb3>=0.1.0",
+        "python-dotenv>=0.20.0",
+        "fastapi>=0.95.0",
+        "uvicorn>=0.20.0",
+        "aiohttp>=3.8.0",
+        "setuptools>=65.0.0",
+        "pydantic>=1.9.0",
+        "pillow>=9.0.0",
+        "asyncio>=3.4.3"
     ],
     entry_points={
         "console_scripts": [

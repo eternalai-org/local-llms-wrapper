@@ -43,6 +43,13 @@ def parse_args():
     version_command = subparsers.add_parser(
         "version", help="Print the version of local_llms"
     )
+    memory_command = subparsers.add_parser(
+        "memory", help="Get memory usage information for the running model"
+    )
+    memory_command.add_argument(
+        "--json", action="store_true", 
+        help="Output memory information in JSON format"
+    )
     download_command = subparsers.add_parser(
        "download", help="Download and extract model files from IPFS"
     )
@@ -159,6 +166,29 @@ def handle_check_downloading(args):
     print(str_files)
     return True
 
+def handle_memory(args):
+    import json
+    memory_info = manager.get_memory_usage()
+    if not memory_info:
+        logger.error("No running model or unable to get memory information")
+        return False
+    
+    if args.json:
+        print(json.dumps(memory_info, indent=2))
+    else:
+        model_hash = memory_info.get("model_hash", "Unknown")
+        rss_mb = memory_info.get("rss_mb", 0)
+        vms_mb = memory_info.get("vms_mb", 0)
+        percent = memory_info.get("percent", 0)
+        
+        print(f"Model: {model_hash}")
+        print(f"Memory Usage:")
+        print(f"  - RSS: {rss_mb:.2f} MB")
+        print(f"  - VMS: {vms_mb:.2f} MB")
+        print(f"  - Percent: {percent:.2f}%")
+    
+    return True
+
 def main():
     known_args, unknown_args = parse_args()
     for arg in unknown_args:
@@ -183,6 +213,8 @@ def main():
         handle_restart(known_args)
     elif known_args.command == "downloading":
         handle_check_downloading(known_args)
+    elif known_args.command == "memory":
+        handle_memory(known_args)
     else:
         logger.error(f"Unknown command: {known_args.command}")
         sys.exit(2)

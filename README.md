@@ -20,6 +20,17 @@ The **Local LLMs Toolkit** empowers developers to deploy state-of-the-art large 
 - **Simple Deployment**: Get models running with minimal configuration
 - **Filecoin Integration**: Upload and download models directly from decentralized storage (Filecoin)
 
+## 🆕 Latest Updates
+
+Version 2.0.7 includes:
+- Improved model restart reliability
+- Enhanced idle model detection and management
+- Better support for Gemma models
+- OpenAI-compatible API endpoints
+- Fixed memory usage monitoring
+- Performance optimizations
+- New `memory` command to check model resource usage
+
 ## 📦 Installation
 
 ### MacOS
@@ -62,6 +73,12 @@ local-llms status
 
 # Stop the current model
 local-llms stop
+
+# Check memory usage of running model
+local-llms memory
+
+# Get detailed memory usage in JSON format
+local-llms memory --json
 ```
 ### Important Notes on Uploading Models
 
