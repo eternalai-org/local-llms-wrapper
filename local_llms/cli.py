@@ -173,6 +173,10 @@ def handle_memory(args):
         logger.error("No running model or unable to get memory information")
         return False
     
+    if "error" in memory_info:
+        logger.error(f"Error getting memory information: {memory_info['error']}")
+        return False
+    
     if args.json:
         print(json.dumps(memory_info, indent=2))
     else:
@@ -181,11 +185,55 @@ def handle_memory(args):
         vms_mb = memory_info.get("vms_mb", 0)
         percent = memory_info.get("percent", 0)
         
-        print(f"Model: {model_hash}")
-        print(f"Memory Usage:")
-        print(f"  - RSS: {rss_mb:.2f} MB")
-        print(f"  - VMS: {vms_mb:.2f} MB")
-        print(f"  - Percent: {percent:.2f}%")
+        # Get system memory information
+        sys_info = memory_info.get("system", {})
+        total_gb = sys_info.get("total_gb", 0)
+        available_gb = sys_info.get("available_gb", 0)
+        used_gb = sys_info.get("used_gb", 0)
+        
+        # Get model information
+        model_info = memory_info.get("model_info", {})
+        context_length = model_info.get("context_length", 0)
+        family = model_info.get("family", "unknown")
+        
+        # Print summary
+        print(f"📊 Memory Usage Report for Model: {model_hash}")
+        print(f"  Model Family: {family}")
+        print(f"  Context Length: {context_length}")
+        print(f"\n📈 Process Memory:")
+        print(f"  Total RSS: {rss_mb:.2f} MB")
+        print(f"  Total VMS: {vms_mb:.2f} MB")
+        
+        # Process details
+        print(f"\n🔍 Process Details:")
+        for proc_name, proc_info in memory_info.get("processes", {}).items():
+            if "error" in proc_info:
+                print(f"  {proc_name}: Error - {proc_info['error']}")
+                continue
+                
+            rss = proc_info.get("rss_mb", 0)
+            vms = proc_info.get("vms_mb", 0)
+            cpu = proc_info.get("cpu_percent", 0)
+            running_time = proc_info.get("running_time_minutes", 0)
+            
+            print(f"  {proc_name}:")
+            print(f"    RSS: {rss:.2f} MB")
+            print(f"    VMS: {vms:.2f} MB")
+            print(f"    CPU: {cpu:.1f}%")
+            print(f"    Running Time: {running_time:.1f} minutes")
+            
+            # Children processes if any
+            if "children" in proc_info and proc_info["children"]:
+                children = proc_info["children"]
+                print(f"    Child Processes: {len(children)}")
+                child_rss = sum(c.get("rss_mb", 0) for c in children)
+                print(f"    Children RSS: {child_rss:.2f} MB")
+        
+        # System memory
+        print(f"\n💻 System Memory:")
+        print(f"  Total: {total_gb:.2f} GB")
+        print(f"  Used: {used_gb:.2f} GB ({percent:.1f}%)")
+        print(f"  Available: {available_gb:.2f} GB")
     
     return True
 

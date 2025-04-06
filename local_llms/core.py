@@ -561,62 +561,151 @@ class LocalLLMManager:
 
     def get_memory_usage(self) -> Dict[str, Any]:
         """
-        Get memory usage statistics for the running model.
+        Get detailed memory usage statistics for the running model and system.
         
         Returns:
             Dict[str, Any]: Dictionary with memory usage statistics
         """
         if not self.pickle_file.exists():
-            return {"error": "No running model"}
+            logger.warning("No running model found")
+            return None
             
         try:
             with open(self.pickle_file, "rb") as f:
                 service_info = pickle.load(f)
                 
+            model_hash = service_info.get("hash")
             pid = service_info.get("pid")
             app_pid = service_info.get("app_pid")
             
             result = {
-                "model_hash": service_info.get("hash"),
+                "model_hash": model_hash,
+                "timestamp": time.time(),
                 "unloaded": service_info.get("unloaded", False),
-                "processes": {}
+                "processes": {},
+                "system": {},
+                "rss_mb": 0,  # Total RSS across all processes
+                "vms_mb": 0,  # Total VMS across all processes
             }
             
-            # Get memory usage of model server process
-            if psutil.pid_exists(pid):
-                process = psutil.Process(pid)
-                memory_info = process.memory_info()
-                result["processes"]["model_server"] = {
-                    "rss": memory_info.rss,
-                    "rss_mb": memory_info.rss / (1024 * 1024),
-                    "vms": memory_info.vms,
-                    "vms_mb": memory_info.vms / (1024 * 1024)
+            # System memory information
+            try:
+                sys_memory = psutil.virtual_memory()
+                result["system"] = {
+                    "total_gb": sys_memory.total / (1024**3),
+                    "available_gb": sys_memory.available / (1024**3),
+                    "used_gb": (sys_memory.total - sys_memory.available) / (1024**3),
+                    "percent": sys_memory.percent
                 }
+                result["percent"] = sys_memory.percent  # System memory usage percentage
+            except Exception as e:
+                logger.error(f"Error getting system memory info: {e}")
+                result["system"] = {"error": str(e)}
+            
+            # Get memory usage of model server process and its children
+            total_rss = 0
+            total_vms = 0
+            
+            if pid and psutil.pid_exists(pid):
+                try:
+                    process = psutil.Process(pid)
+                    memory_info = process.memory_info()
+                    cpu_percent = process.cpu_percent(interval=0.1)
+                    
+                    proc_info = {
+                        "rss": memory_info.rss,
+                        "rss_mb": memory_info.rss / (1024 * 1024),
+                        "vms": memory_info.vms,
+                        "vms_mb": memory_info.vms / (1024 * 1024),
+                        "cpu_percent": cpu_percent,
+                        "create_time": process.create_time(),
+                        "running_time_minutes": (time.time() - process.create_time()) / 60
+                    }
+                    
+                    # Add to totals
+                    total_rss += memory_info.rss
+                    total_vms += memory_info.vms
+                    
+                    # Try to get memory maps info for shared vs private memory
+                    try:
+                        memory_maps = process.memory_maps()
+                        private_rss = sum(m.private for m in memory_maps)
+                        shared_rss = sum(m.shared for m in memory_maps)
+                        proc_info["private_rss_mb"] = private_rss / (1024 * 1024)
+                        proc_info["shared_rss_mb"] = shared_rss / (1024 * 1024)
+                    except:
+                        # Memory maps might not be available on all platforms
+                        pass
+                        
+                    # Check for child processes
+                    children = []
+                    try:
+                        for child in process.children(recursive=True):
+                            child_info = child.memory_info()
+                            children.append({
+                                "pid": child.pid,
+                                "rss_mb": child_info.rss / (1024 * 1024),
+                                "vms_mb": child_info.vms / (1024 * 1024)
+                            })
+                            total_rss += child_info.rss
+                            total_vms += child_info.vms
+                    except:
+                        pass
+                        
+                    if children:
+                        proc_info["children"] = children
+                        
+                    result["processes"]["model_server"] = proc_info
+                except Exception as e:
+                    logger.error(f"Error getting model process info: {e}")
+                    result["processes"]["model_server"] = {"error": str(e)}
+            else:
+                result["processes"]["model_server"] = {"error": "Process not found"}
                 
             # Get memory usage of API server process
-            if psutil.pid_exists(app_pid):
-                process = psutil.Process(app_pid)
-                memory_info = process.memory_info()
-                result["processes"]["api_server"] = {
-                    "rss": memory_info.rss,
-                    "rss_mb": memory_info.rss / (1024 * 1024),
-                    "vms": memory_info.vms,
-                    "vms_mb": memory_info.vms / (1024 * 1024)
-                }
+            if app_pid and psutil.pid_exists(app_pid):
+                try:
+                    process = psutil.Process(app_pid)
+                    memory_info = process.memory_info()
+                    cpu_percent = process.cpu_percent(interval=0.1)
+                    
+                    proc_info = {
+                        "rss": memory_info.rss,
+                        "rss_mb": memory_info.rss / (1024 * 1024),
+                        "vms": memory_info.vms,
+                        "vms_mb": memory_info.vms / (1024 * 1024),
+                        "cpu_percent": cpu_percent,
+                        "create_time": process.create_time(),
+                        "running_time_minutes": (time.time() - process.create_time()) / 60
+                    }
+                    
+                    # Add to totals
+                    total_rss += memory_info.rss
+                    total_vms += memory_info.vms
+                    
+                    result["processes"]["api_server"] = proc_info
+                except Exception as e:
+                    logger.error(f"Error getting API process info: {e}")
+                    result["processes"]["api_server"] = {"error": str(e)}
+            else:
+                result["processes"]["api_server"] = {"error": "Process not found"}
                 
-            # Calculate total memory usage
-            total_rss = sum(p.get("rss", 0) for p in result["processes"].values())
-            total_vms = sum(p.get("vms", 0) for p in result["processes"].values())
+            # Add totals
+            result["rss_mb"] = total_rss / (1024 * 1024)
+            result["vms_mb"] = total_vms / (1024 * 1024)
             
-            result["total"] = {
-                "rss": total_rss,
-                "rss_mb": total_rss / (1024 * 1024),
-                "vms": total_vms,
-                "vms_mb": total_vms / (1024 * 1024)
+            # Add model information
+            result["model_info"] = {
+                "context_length": service_info.get("context_length", 0),
+                "family": service_info.get("family", "unknown"),
+                "multimodal": service_info.get("multimodal", False),
+                "app_port": service_info.get("app_port", 0),
+                "llm_port": service_info.get("port", 0)
             }
             
             return result
+            
         except Exception as e:
-            logger.error(f"Error getting memory usage: {str(e)}")
+            logger.error(f"Error getting memory usage: {str(e)}", exc_info=True)
             return {"error": str(e)}
         

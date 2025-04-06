@@ -22,7 +22,7 @@ The **Local LLMs Toolkit** empowers developers to deploy state-of-the-art large 
 
 ## 🆕 Latest Updates
 
-Version 2.0.7 includes:
+Version 2.0.8 includes:
 - Improved model restart reliability
 - Enhanced idle model detection and management
 - Better support for Gemma models
@@ -30,6 +30,10 @@ Version 2.0.7 includes:
 - Fixed memory usage monitoring
 - Performance optimizations
 - New `memory` command to check model resource usage
+- Optimized download process with better concurrency and error handling
+- Improved memory diagnostics with detailed system and process information
+- Exponential backoff for more reliable downloads
+- Better temp file handling to prevent corruption during downloads
 
 ## 📦 Installation
 
