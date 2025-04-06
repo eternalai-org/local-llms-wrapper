@@ -1,9 +1,5 @@
 import os
-import shutil
-import time
-import httpx
 import requests
-import time
 import aiohttp
 import asyncio
 import pickle
@@ -171,7 +167,7 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     total_files = len(files)
     
     # Use semaphore to limit concurrent downloads
-    max_concurrent_downloads = min(os.cpu_count() * 2, 8)
+    max_concurrent_downloads = min(os.cpu_count() * 2, 2)
     semaphore = asyncio.Semaphore(max_concurrent_downloads)
     
     # Wrapper for download with semaphore

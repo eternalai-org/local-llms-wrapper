@@ -10,7 +10,6 @@ import httpx
 import asyncio
 import base64
 import tempfile
-import functools
 import random
 import time
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
