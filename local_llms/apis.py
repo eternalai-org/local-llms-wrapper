@@ -11,26 +11,23 @@ import asyncio
 import base64
 import tempfile
 import functools
+import random
+import time
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, validator
-from typing import List, Dict, Optional, Union, Any, Callable
+from typing import Dict, Optional, Union, Any, Callable
 from functools import lru_cache
-import time
 
-# Configuration
-class Config:
-    """
-    Configuration class holding the default model names for different types of requests.
-    """
-    TEXT_MODEL = "gpt-4-turbo"          # Default model for text-based chat completions
-    VISION_MODEL = "gpt-4-vision-preview"  # Model used for vision-based requests
-    EMBEDDING_MODEL = "text-embedding-ada-002"  # Model used for generating embeddings
-    HTTP_TIMEOUT = 60.0                 # Default timeout for HTTP requests in seconds
-    CACHE_TTL = 300                     # Cache time-to-live in seconds (5 minutes)
-    MAX_RETRIES = 3                     # Maximum number of retries for HTTP requests
-    POOL_CONNECTIONS = 100              # Maximum number of connections in the pool
-    POOL_KEEPALIVE = 20                 # Keep connections alive for 20 seconds
+# Import schemas from schema.py
+from local_llms.schema import (
+    Config, 
+    ChatCompletionRequest, 
+    ChatCompletionResponse,
+    ChatCompletionResponseChoice,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    EmbeddingResponseData
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
@@ -38,87 +35,6 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-
-class ChatCompletionRequest(BaseModel):
-    """
-    Model for chat completion requests, including messages, streaming option, and tools.
-    """
-    model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
-    messages: Optional[Union[List[Any]]]
-    stream: Optional[bool] = False          # Whether to stream the response
-    tools: Optional[Any] = None             # Optional list of tools to use
-    max_tokens: Optional[int] = None        # Maximum tokens in the response
-    temperature: Optional[float] = None     # Temperature for sampling
-    top_p: Optional[float] = None           # Top p for nucleus sampling
-
-    @validator("messages")
-    def check_messages_not_empty(cls, v):
-        """
-        Ensure that the messages list is not empty.
-        """
-        if not v:
-            raise ValueError("messages cannot be empty")
-        return v
-    
-    def is_vision_request(self) -> bool:
-        """
-        Check if the request includes image content, indicating a vision-based request.
-        If so, switch the model to the vision model.
-        """
-        # Early optimization - only check the last message from the user
-        if not self.messages:
-            return False
-            
-        last_message = self.messages[-1]
-        if last_message.get("role") != "user":
-            # Check all messages if the last one is not from user
-            for message in self.messages:
-                if self._check_message_for_image(message):
-                    return True
-            return False
-            
-        # Check just the last user message
-        return self._check_message_for_image(last_message)
-    
-    def _check_message_for_image(self, message: Any) -> bool:
-        """Helper method to check if a message contains an image."""
-        content = message.get("content")
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "image_url":
-                    self.model = Config.VISION_MODEL    
-                    return True
-        return False
-
-    def fix_message_order(self) -> None:
-        if self.messages:
-            return
-        fixed_messages = []
-        if self.messages[0].get("role") == "system":
-            self.messages.pop(0)
-            fixed_messages.append(
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant capable of using tools when necessary. Respond in natural language when tools are not required."
-                }
-            )
-        for msg in self.messages:
-            fixed_messages.append(msg)
-        self.messages = fixed_messages
-                
-class EmbeddingRequest(BaseModel):
-    """
-    Model for embedding requests.
-    """
-    model: str = Config.EMBEDDING_MODEL     # Model to use, defaults to embedding model
-    input: List[str] = Field(..., description="List of text inputs for embedding")  # Text inputs to embed
-    
-    @validator("input")
-    def check_input_not_empty(cls, v):
-        """Ensure the input list is not empty."""
-        if not v:
-            raise ValueError("input list cannot be empty")
-        return v
 
 # Cache for service port to avoid repeated lookups
 @lru_cache(maxsize=1)
@@ -171,7 +87,21 @@ class ServiceHandler:
             )
 
         # Make a non-streaming API call
-        return await ServiceHandler._make_api_call(port, "/v1/chat/completions", request_dict)
+        response_data = await ServiceHandler._make_api_call(port, "/v1/chat/completions", request_dict)
+        
+        # Format the response according to OpenAI's schema
+        if not isinstance(response_data, dict):
+            # If the response is a string or other non-dict type, wrap it
+            response = ChatCompletionResponse.create_from_content(response_data, request.model)
+            return response.model_dump() if hasattr(response, "model_dump") else response.dict()
+        
+        # If response is already in OpenAI format, return it
+        if "choices" in response_data and "object" in response_data:
+            return response_data
+        
+        # Otherwise, format it
+        response = ChatCompletionResponse.create_from_dict(response_data, request.model)
+        return response.model_dump() if hasattr(response, "model_dump") else response.dict()
 
     @staticmethod
     async def generate_vision_response(request: ChatCompletionRequest):
@@ -253,8 +183,10 @@ class ServiceHandler:
                 error_message = stderr.decode().strip() if stderr else "Unknown error"
                 raise HTTPException(status_code=500, detail=f"Command failed: {error_message}")
 
-            response = stdout.decode().strip()
-            return response
+            # Create formatted response
+            response = ChatCompletionResponse.create_from_content(stdout.decode().strip(), request.model)
+            return response.model_dump() if hasattr(response, "model_dump") else response.dict()
+            
         except HTTPException:
             raise
         except Exception as e:
@@ -309,7 +241,30 @@ class ServiceHandler:
         port = await ServiceHandler.get_service_port()
         # Convert to dict, supporting both Pydantic v1 and v2
         request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
-        return await ServiceHandler._make_api_call(port, "/v1/embeddings", request_dict)
+        response_data = await ServiceHandler._make_api_call(port, "/v1/embeddings", request_dict)
+        
+        # Handle if the response is already in the OpenAI format
+        if isinstance(response_data, dict) and "data" in response_data and "object" in response_data:
+            return response_data
+        
+        # Handle when the response is a raw list of embeddings or a single embedding
+        if isinstance(response_data, list):
+            # List of embeddings
+            input_texts = request.input if isinstance(request.input, list) else [request.input]
+            response = EmbeddingResponse.create_from_embeddings(response_data, request.model, input_texts)
+            return response.model_dump() if hasattr(response, "model_dump") else response.dict()
+            
+        elif isinstance(response_data, dict) and "embedding" in response_data:
+            # Single embedding in a dict
+            response = EmbeddingResponse.create_from_single_embedding(
+                response_data["embedding"], 
+                request.model, 
+                response_data.get("usage")
+            )
+            return response.model_dump() if hasattr(response, "model_dump") else response.dict()
+        else:
+            # Unexpected format, return as is
+            return response_data
     
     @staticmethod
     async def _make_api_call(port: int, endpoint: str, data: dict, retries: int = Config.MAX_RETRIES) -> dict:
@@ -456,9 +411,6 @@ async def add_process_time_header(request: Request, call_next):
 async def get_background_tasks():
     """Dependency to get background tasks."""
     return BackgroundTasks()
-
-# Import random here to avoid moving it up (where it might not be needed for all code paths)
-import random
 
 # Lifecycle Events
 @app.on_event("startup")
