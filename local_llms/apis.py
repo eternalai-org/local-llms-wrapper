@@ -164,8 +164,26 @@ class ServiceHandler:
 
         if request.stream:
             if request.tools:
-                raise HTTPException(status_code=400, detail="Streaming is not supported with tools")
-            # Return a streaming response
+                # For streaming with tools, we need to get the non-streaming response first
+                # and then simulate streaming from it
+                stream_request = request_dict.copy()
+                stream_request["stream"] = False  # Get non-streaming response first
+                
+                # Make a non-streaming API call
+                response_data = await ServiceHandler._make_api_call(port, "/v1/chat/completions", stream_request)
+                
+                # Return a simulated streaming response
+                return StreamingResponse(
+                    ServiceHandler._fake_stream_with_tools(response_data, request.model),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no"
+                    }
+                )
+            
+            # Return a streaming response for non-tool requests
             return StreamingResponse(
                 ServiceHandler._stream_generator(port, request_dict),
                 media_type="text/event-stream"
@@ -439,6 +457,95 @@ class ServiceHandler:
         except Exception as e:
             logger.error(f"Error during streaming: {e}")
             yield f"data: {{\"error\":{{\"message\":\"{str(e)}\",\"code\":500}}}}\n\n"
+
+    @staticmethod
+    async def _fake_stream_with_tools(formatted_response: dict, model: str):
+        """
+        Generate a fake streaming response for tool-based chat completions.
+        This method simulates the streaming behavior by breaking a complete response into chunks.
+        
+        Args:
+            formatted_response: The complete response to stream in chunks
+            model: The model name
+        """
+        import uuid
+        import json
+        import time
+        
+        # Base structure for each chunk
+        base_chunk = {
+            "id": formatted_response.get("id", f"chatcmpl-{uuid.uuid4().hex}"),
+            "object": "chat.completion.chunk",
+            "created": formatted_response.get("created", int(time.time())),
+            "model": formatted_response.get("model", model),
+        }
+        
+        # Add system_fingerprint only if it exists in the response
+        if "system_fingerprint" in formatted_response:
+            base_chunk["system_fingerprint"] = formatted_response["system_fingerprint"]
+
+        choices = formatted_response.get("choices", [])
+        if not choices:
+            # If no choices, return empty response and DONE
+            yield f"data: {json.dumps({**base_chunk, 'choices': []})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        # Step 1: Initial chunk with role for all choices
+        initial_choices = [
+            {
+                "index": choice["index"],
+                "delta": {"role": "assistant", "content": ""},
+                "logprobs": None,
+                "finish_reason": None
+            }
+            for choice in choices
+        ]
+        yield f"data: {json.dumps({**base_chunk, 'choices': initial_choices})}\n\n"
+
+        # Step 2: Chunk with content or tool_calls for all choices
+        content_choices = []
+        for choice in choices:
+            message = choice.get("message", {})
+            delta = {}
+            
+            # For tool calls responses
+            if "tool_calls" in message:
+                delta["tool_calls"] = message["tool_calls"]
+                delta["reasoning_content"] = None
+            # For content responses
+            elif message.get("content"):
+                delta["content"] = message["content"]
+                delta["reasoning_content"] = None
+            else:
+                # Empty content/null case
+                delta["reasoning_content"] = None
+                
+            if delta:  # Only include choices with content
+                content_choices.append({
+                    "index": choice["index"],
+                    "delta": delta,
+                    "logprobs": None,
+                    "finish_reason": None
+                })
+                
+        if content_choices:
+            yield f"data: {json.dumps({**base_chunk, 'choices': content_choices})}\n\n"
+
+        # Step 3: Final chunk with finish reason for all choices
+        finish_choices = [
+            {
+                "index": choice["index"],
+                "delta": {},
+                "logprobs": None,
+                "finish_reason": choice["finish_reason"]
+            }
+            for choice in choices
+        ]
+        yield f"data: {json.dumps({**base_chunk, 'choices': finish_choices})}\n\n"
+
+        # Step 4: End of stream
+        yield "data: [DONE]\n\n"
 
 # Request Processor
 class RequestProcessor:
