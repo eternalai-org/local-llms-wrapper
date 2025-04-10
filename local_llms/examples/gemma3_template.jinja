@@ -23,17 +23,17 @@
   {{ '<start_of_turn>' + role + '\n' + (first_user_prefix if loop.first else "") }}
   
   {%- if message['content'] is string -%}
-    {{ message['content'] | trim }}
+    {{ message['content'] }}
   {%- elif message['content'] is iterable -%}
     {%- for item in message['content'] -%}
       {%- if item['type'] == 'image' -%}
         {{ '<start_of_image>' }}
       {%- elif item['type'] == 'text' -%}
-        {{ item['text'] | trim }}
+        {{ item['text'] }}
       {%- endif -%}
     {%- endfor -%}
   {%- else -%}
-    {{ raise_exception("Invalid content type") }}
+    {{ "" }}
   {%- endif -%}
   
   {{ '<end_of_turn>\n' }}

@@ -119,7 +119,7 @@ class LocalLLMManager:
             logger.error(f"Error restarting LLM service: {str(e)}", exc_info=True)
             return False
 
-    def start(self, hash: str, port: int = 11434, host: str = "0.0.0.0", context_length: int = 4096) -> bool:
+    def start(self, hash: str, port: int = 11434, host: str = "0.0.0.0", context_length: int = 32768) -> bool:
         """
         Start the local LLM service in the background.
 
@@ -198,6 +198,7 @@ class LocalLLMManager:
                     "--port", str(llm_running_port),
                     "--host", host,
                     "-c", str(context_length),
+                    "-fa",
                     "--pooling", "cls",
                     "--no-webui",
                     "--chat-template-file", template_path
@@ -210,6 +211,7 @@ class LocalLLMManager:
                     "--port", str(llm_running_port),
                     "--host", host,
                     "-c", str(context_length),
+                    "-fa",
                     "--pooling", "cls",
                     "--no-webui"
                 ]

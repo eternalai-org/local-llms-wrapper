@@ -12,9 +12,10 @@ import base64
 import tempfile
 import random
 import time
+import json
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from typing import Dict, Optional, Union, Any, Callable
+from typing import Dict, Optional, Union, Any, Callable, Tuple
 from functools import lru_cache
 
 # Import schemas from schema.py
@@ -65,6 +66,91 @@ class ServiceHandler:
                 logger.error("Service information not set")
                 raise HTTPException(status_code=503, detail="Service information not set")
             return app.state.service_info["port"]
+    
+    @staticmethod
+    def _detect_and_fix_tool_calls_in_content(response_data: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        """
+        Detect and fix malformed tool calls that are encoded as JSON strings in content.
+        
+        Args:
+            response_data: The response data from the LLM
+            
+        Returns:
+            Tuple[Dict, bool]: The fixed response data and a boolean indicating if a retry is needed
+        """
+        need_retry = False
+        
+        # Handle non-dict responses
+        if not isinstance(response_data, dict):
+            return response_data, need_retry
+        
+        # Make a copy to avoid modifying the original
+        fixed_response = response_data.copy()
+        
+        # Process only if the response has choices
+        if "choices" not in fixed_response:
+            return fixed_response, need_retry
+        
+        choices = fixed_response.get("choices", [])
+        
+        # Iterate through all choices
+        for i, choice in enumerate(choices):
+            if not isinstance(choice, dict):
+                continue
+            
+            message = choice.get("message", {})
+            if not message or "content" not in message or not message["content"]:
+                continue
+            
+            content = message["content"]
+            
+            # Check if content contains a JSON string with tool_calls
+            if not isinstance(content, str) or "tool_calls" not in content:
+                continue
+            
+            # Try to parse as JSON
+            try:
+                parsed_content = json.loads(content)
+                
+                # Check if parsed content has tool_calls
+                if not isinstance(parsed_content, dict) or "tool_calls" not in parsed_content:
+                    continue
+                
+                tool_calls = parsed_content.get("tool_calls", [])
+                
+                # Only proceed if tool_calls is a non-empty list
+                if not isinstance(tool_calls, list) or not tool_calls:
+                    logger.warning("Found tool_calls in content but it's not a valid list")
+                    need_retry = True
+                    continue
+                
+                # Found valid tool_calls, let's fix the response
+                logger.warning(f"Found tool_calls in content: {tool_calls}")
+                
+                # Create fixed message structure
+                fixed_message = message.copy()
+                fixed_message["tool_calls"] = tool_calls
+                fixed_message["content"] = None  # Set content to null
+                
+                # Update the choice with fixed message
+                fixed_choice = choice.copy()
+                fixed_choice["message"] = fixed_message
+                
+                # Update choices list
+                new_choices = choices.copy() 
+                new_choices[i] = fixed_choice
+                fixed_response["choices"] = new_choices
+                
+                logger.info("Successfully fixed tool_calls in response")
+                return fixed_response, False  # No need to retry as we fixed it
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                # JSON parsing failed
+                logger.warning(f"Content contains 'tool_calls' but couldn't parse JSON: {e}")
+                need_retry = True
+        
+        # Return the possibly modified response and retry flag
+        return fixed_response, need_retry
     
     @staticmethod
     async def generate_text_response(request: ChatCompletionRequest):
@@ -292,7 +378,21 @@ class ServiceHandler:
                         raise HTTPException(status_code=response.status_code, detail=error_text)
                     last_exception = HTTPException(status_code=response.status_code, detail=error_text)
                 else:
-                    return response.json()
+                    response_data = response.json()
+                    
+                    # Check for tool calls in content and fix if needed
+                    fixed_data, need_retry = ServiceHandler._detect_and_fix_tool_calls_in_content(response_data)
+                    
+                    # If we need to retry but we're not on the last attempt
+                    if need_retry and attempts < retries - 1:
+                        logger.info("Detected issue with tool calls, will retry")
+                        attempts += 1
+                        # Use exponential backoff before retry
+                        sleep_time = (2 ** attempts) + (0.1 * random.random())
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    
+                    return fixed_data
             except httpx.TimeoutException as e:
                 logger.warning(f"Timeout during API call (attempt {attempts+1}/{retries}): {str(e)}")
                 last_exception = HTTPException(status_code=504, detail="Gateway Timeout")
