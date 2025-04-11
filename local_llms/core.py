@@ -202,6 +202,8 @@ class LocalLLMManager:
                     "--pooling", "cls",
                     "--no-webui",
                     "-ngl", "-1",
+                    "--no-mmap",
+                    "--mlock",
                     "--chat-template-file", template_path
                 ]
             else:
@@ -215,6 +217,8 @@ class LocalLLMManager:
                     "-fa",
                     "--pooling", "cls",
                     "-ngl", "-1",
+                    "--no-mmap",
+                    "--mlock",
                     "--no-webui"
                 ]
             # Add memory optimization parameters if defined
@@ -541,7 +545,7 @@ class LocalLLMManager:
                     logger.warning("Process did not terminate, forcing kill.")
                     process.kill()
 
-            # Terminate FastAPI app by PID
+            # Terminate FastAPI app by PIDd
             if psutil.pid_exists(app_pid):
                 app_process = psutil.Process(app_pid)
                 app_process.terminate()
