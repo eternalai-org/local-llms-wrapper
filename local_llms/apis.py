@@ -514,7 +514,7 @@ class ServiceHandler:
                 updated_tool_calls = []
                 for idx, tool_call in enumerate(message["tool_calls"]):
                     updated_tool_calls.append(tool_call)
-                    updated_tool_calls[idx]["id"] = str(idx)
+                    updated_tool_calls[idx]["index"] = str(idx)
                 delta["tool_calls"] = updated_tool_calls
                 delta["reasoning_content"] = None
             # For content responses
