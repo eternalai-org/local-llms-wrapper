@@ -201,6 +201,7 @@ class LocalLLMManager:
                     "-fa",
                     "--pooling", "cls",
                     "--no-webui",
+                    "-ngl", "-1",
                     "--chat-template-file", template_path
                 ]
             else:
@@ -213,6 +214,7 @@ class LocalLLMManager:
                     "-c", str(context_length),
                     "-fa",
                     "--pooling", "cls",
+                    "-ngl", "-1",
                     "--no-webui"
                 ]
             # Add memory optimization parameters if defined
