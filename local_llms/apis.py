@@ -560,7 +560,9 @@ class RequestProcessor:
     """
     queue = asyncio.Queue()  # Queue for sequential request processing
     processing_lock = asyncio.Lock()  # Lock to ensure only one request is processed at a time
-    endpoint_handlers = {
+    
+    # Define which endpoints need to be processed sequentially
+    MODEL_ENDPOINTS = {
         "/v1/chat/completions": (ChatCompletionRequest, ServiceHandler.generate_text_response),
         "/v1/embeddings": (EmbeddingRequest, ServiceHandler.generate_embeddings_response),
         "/chat/completions": (ChatCompletionRequest, ServiceHandler.generate_text_response),
@@ -578,6 +580,19 @@ class RequestProcessor:
         await RequestProcessor.queue.put((endpoint, request_data, future))
         return await future
     
+    @staticmethod
+    async def process_direct(endpoint: str, request_data: dict):
+        """
+        Process a request directly without queueing.
+        Use this for administrative endpoints that don't require model access.
+        """
+        if endpoint in RequestProcessor.MODEL_ENDPOINTS:
+            model_cls, handler = RequestProcessor.MODEL_ENDPOINTS[endpoint]
+            request_obj = model_cls(**request_data)
+            return await handler(request_obj)
+        else:
+            raise HTTPException(status_code=404, detail="Endpoint not found")
+    
     # Global worker function
     @staticmethod
     async def worker():
@@ -591,8 +606,8 @@ class RequestProcessor:
                 
                 # Use the lock to ensure only one request is processed at a time
                 async with RequestProcessor.processing_lock:
-                    if endpoint in RequestProcessor.endpoint_handlers:
-                        model_cls, handler = RequestProcessor.endpoint_handlers[endpoint]
+                    if endpoint in RequestProcessor.MODEL_ENDPOINTS:
+                        model_cls, handler = RequestProcessor.MODEL_ENDPOINTS[endpoint]
                         try:
                             logger.info(f"Processing request for endpoint: {endpoint}")
                             request_obj = model_cls(**request_data)
@@ -676,6 +691,7 @@ async def health():
     """
     Health check endpoint.
     Returns a simple status to indicate the service is running.
+    This endpoint bypasses the request queue for immediate response.
     """
     # Invalidate the service port cache periodically
     get_cached_service_port.cache_clear()
@@ -691,6 +707,7 @@ async def unload_model():
     """
     Endpoint to unload the model from memory but keep the server running.
     This helps reduce memory usage when the model is not actively being used.
+    This endpoint bypasses the request queue for immediate response.
     """
     try:
         logger.info("Received request to unload model from memory")
@@ -714,6 +731,7 @@ async def unload_model():
 async def reload_model(model_path: dict):
     """
     Endpoint to reload a previously unloaded model.
+    This endpoint bypasses the request queue for immediate response.
     
     Args:
         model_path (dict): Dictionary containing the model_path key with path to the model file
@@ -748,6 +766,7 @@ async def update(request: dict):
     """
     Update the service information in the app's state.
     Stores the provided request data for use in determining the service port.
+    This endpoint bypasses the request queue for immediate response.
     """
     app.state.service_info = request
     # Invalidate the cache when service info is updated
@@ -755,54 +774,43 @@ async def update(request: dict):
     logger.info(f"Updated service info: {request.get('family', 'unknown')} on port {request.get('port', 'unknown')}")
     return {"status": "ok", "message": "Service info updated successfully"}
 
-# Add background task handling
-async def handle_request_in_background(background_tasks: BackgroundTasks, endpoint: str, request_data: dict):
-    """Handle a request in the background."""
-    try:
-        return await RequestProcessor.process_request(endpoint, request_data)
-    except Exception as e:
-        logger.error(f"Background task error: {str(e)}")
-        raise
-
-# Combined endpoint handler function
-async def handle_completion_request(request: ChatCompletionRequest, endpoint: str):
-    """
-    Common handler for chat completion requests.
-    """
-    logger.info(f"Received chat completion request for model: {request.model}")
-    
-    if request.is_vision_request():
-        raise HTTPException(status_code=400, detail="Vision-based requests are not supported")
-        # return await ServiceHandler.generate_vision_response(request)
-        
-    return await ServiceHandler.generate_text_response(request)
-
+# Modified endpoint handlers for model-based endpoints
 @app.post("/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """
     Endpoint for chat completion requests.
-    Processes the request, checks for vision content, fixes message order, and generates the response.
+    Uses the request queue to ensure only one model request is processed at a time.
     """
-    return await handle_completion_request(request, "/chat/completions")
+    # Convert to dict, supporting both Pydantic v1 and v2
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    return await RequestProcessor.process_request("/chat/completions", request_dict)
 
 @app.post("/embeddings")
 async def embeddings(request: EmbeddingRequest):
     """
     Endpoint for embedding requests.
-    Generates embeddings using the specified model.
+    Uses the request queue to ensure only one model request is processed at a time.
     """
-    return await ServiceHandler.generate_embeddings_response(request)
+    # Convert to dict, supporting both Pydantic v1 and v2
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    return await RequestProcessor.process_request("/embeddings", request_dict)
 
 @app.post("/v1/chat/completions")
 async def v1_chat_completions(request: ChatCompletionRequest):
     """
     Endpoint for chat completion requests (v1 API).
+    Uses the request queue to ensure only one model request is processed at a time.
     """
-    return await handle_completion_request(request, "/v1/chat/completions")
+    # Convert to dict, supporting both Pydantic v1 and v2
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    return await RequestProcessor.process_request("/v1/chat/completions", request_dict)
 
 @app.post("/v1/embeddings")
 async def v1_embeddings(request: EmbeddingRequest):
     """
     Endpoint for embedding requests (v1 API).
+    Uses the request queue to ensure only one model request is processed at a time.
     """
-    return await ServiceHandler.generate_embeddings_response(request)
+    # Convert to dict, supporting both Pydantic v1 and v2
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    return await RequestProcessor.process_request("/v1/embeddings", request_dict)
