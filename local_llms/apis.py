@@ -511,7 +511,11 @@ class ServiceHandler:
             
             # For tool calls responses
             if "tool_calls" in message:
-                delta["tool_calls"] = message["tool_calls"]
+                updated_tool_calls = []
+                for idx, tool_call in enumerate(message["tool_calls"]):
+                    updated_tool_calls.append(tool_call)
+                    updated_tool_calls[idx]["id"] = str(idx)
+                delta["tool_calls"] = updated_tool_calls
                 delta["reasoning_content"] = None
             # For content responses
             elif message.get("content"):
