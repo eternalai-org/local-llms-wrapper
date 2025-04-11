@@ -535,7 +535,7 @@ class LocalLLMManager:
             if psutil.pid_exists(pid):
                 process = psutil.Process(pid)
                 process.terminate()
-                process.wait(timeout=5)  # Allow process to shut down gracefully
+                process.wait(timeout=120)  # Allow process to shut down gracefully
                 
                 if process.is_running():  # Force kill if still alive
                     logger.warning("Process did not terminate, forcing kill.")
@@ -545,7 +545,7 @@ class LocalLLMManager:
             if psutil.pid_exists(app_pid):
                 app_process = psutil.Process(app_pid)
                 app_process.terminate()
-                app_process.wait(timeout=5)  # Allow process to shut down gracefully
+                app_process.wait(timeout=120)  # Allow process to shut down gracefully
                 
                 if app_process.is_running():  # Force kill if still alive
                     logger.warning("API process did not terminate, forcing kill.")
