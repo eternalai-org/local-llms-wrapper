@@ -550,9 +550,12 @@ class ServiceHandler:
 # Request Processor
 class RequestProcessor:
     """
-    Class for processing requests asynchronously using a queue.
+    Class for processing requests sequentially using a queue.
+    Ensures that only one request is processed at a time to accommodate limitations
+    of backends like llama-server that can only handle one request at a time.
     """
-    queue = asyncio.Queue()  # Queue for asynchronous request processing
+    queue = asyncio.Queue()  # Queue for sequential request processing
+    processing_lock = asyncio.Lock()  # Lock to ensure only one request is processed at a time
     endpoint_handlers = {
         "/v1/chat/completions": (ChatCompletionRequest, ServiceHandler.generate_text_response),
         "/v1/embeddings": (EmbeddingRequest, ServiceHandler.generate_embeddings_response),
@@ -563,7 +566,8 @@ class RequestProcessor:
     @staticmethod
     async def process_request(endpoint: str, request_data: dict):
         """
-        Process a request asynchronously by adding it to the queue.
+        Process a request by adding it to the queue and waiting for the result.
+        This ensures requests are processed in order, one at a time.
         Returns a Future that will be resolved with the result.
         """
         future = asyncio.Future()
@@ -574,24 +578,29 @@ class RequestProcessor:
     @staticmethod
     async def worker():
         """
-        Worker function to process requests from the queue asynchronously.
+        Worker function to process requests from the queue sequentially.
+        Only one request is processed at a time.
         """
         while True:
             try:
                 endpoint, request_data, future = await RequestProcessor.queue.get()
                 
-                if endpoint in RequestProcessor.endpoint_handlers:
-                    model_cls, handler = RequestProcessor.endpoint_handlers[endpoint]
-                    try:
-                        request_obj = model_cls(**request_data)
-                        result = await handler(request_obj)
-                        future.set_result(result)
-                    except Exception as e:
-                        logger.error(f"Handler error for {endpoint}: {str(e)}")
-                        future.set_exception(e)
-                else:
-                    logger.error(f"Endpoint not found: {endpoint}")
-                    future.set_exception(HTTPException(status_code=404, detail="Endpoint not found"))
+                # Use the lock to ensure only one request is processed at a time
+                async with RequestProcessor.processing_lock:
+                    if endpoint in RequestProcessor.endpoint_handlers:
+                        model_cls, handler = RequestProcessor.endpoint_handlers[endpoint]
+                        try:
+                            logger.info(f"Processing request for endpoint: {endpoint}")
+                            request_obj = model_cls(**request_data)
+                            result = await handler(request_obj)
+                            future.set_result(result)
+                            logger.info(f"Completed request for endpoint: {endpoint}")
+                        except Exception as e:
+                            logger.error(f"Handler error for {endpoint}: {str(e)}")
+                            future.set_exception(e)
+                    else:
+                        logger.error(f"Endpoint not found: {endpoint}")
+                        future.set_exception(HTTPException(status_code=404, detail="Endpoint not found"))
                 
                 RequestProcessor.queue.task_done()
             except asyncio.CancelledError:
