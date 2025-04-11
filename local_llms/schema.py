@@ -15,9 +15,9 @@ class Config:
     TEXT_MODEL = "gpt-4-turbo"          # Default model for text-based chat completions
     VISION_MODEL = "gpt-4-vision-preview"  # Model used for vision-based requests
     EMBEDDING_MODEL = "text-embedding-ada-002"  # Model used for generating embeddings
-    HTTP_TIMEOUT = 60.0                 # Default timeout for HTTP requests in seconds
+    HTTP_TIMEOUT = 600.0                # Default timeout for HTTP requests in seconds (increased to 10 minutes)
     CACHE_TTL = 300                     # Cache time-to-live in seconds (5 minutes)
-    MAX_RETRIES = 3                     # Maximum number of retries for HTTP requests
+    MAX_RETRIES = 5                     # Maximum number of retries for HTTP requests (increased from 3)
     POOL_CONNECTIONS = 100              # Maximum number of connections in the pool
     POOL_KEEPALIVE = 20                 # Keep connections alive for 20 seconds
 

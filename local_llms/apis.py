@@ -15,7 +15,7 @@ import time
 import json
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from typing import Dict, Optional, Union, Any, Callable, Tuple
+from typing import Dict, Any, Tuple
 from functools import lru_cache
 
 # Import schemas from schema.py
@@ -156,6 +156,7 @@ class ServiceHandler:
     async def generate_text_response(request: ChatCompletionRequest):
         """
         Generate a response for chat completion requests, supporting both streaming and non-streaming.
+        Uses infinite timeout for non-streaming requests to prevent Gateway Timeout errors.
         """
         port = await ServiceHandler.get_service_port()
         
@@ -169,7 +170,7 @@ class ServiceHandler:
                 stream_request = request_dict.copy()
                 stream_request["stream"] = False  # Get non-streaming response first
                 
-                # Make a non-streaming API call
+                # Make a non-streaming API call with infinite timeout
                 response_data = await ServiceHandler._make_api_call(port, "/v1/chat/completions", stream_request)
                 
                 # Return a simulated streaming response
@@ -189,7 +190,7 @@ class ServiceHandler:
                 media_type="text/event-stream"
             )
 
-        # Make a non-streaming API call
+        # Make a non-streaming API call with infinite timeout for chat completions
         response_data = await ServiceHandler._make_api_call(port, "/v1/chat/completions", request_dict)
         
         # Format the response according to OpenAI's schema
@@ -340,10 +341,14 @@ class ServiceHandler:
     async def generate_embeddings_response(request: EmbeddingRequest):
         """
         Generate a response for embedding requests.
+        This function uses an infinite timeout to prevent Gateway Timeout errors,
+        as embedding generation can take a long time for large inputs.
         """
         port = await ServiceHandler.get_service_port()
         # Convert to dict, supporting both Pydantic v1 and v2
         request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+        
+        # _make_api_call will use infinite timeout for embeddings endpoints
         response_data = await ServiceHandler._make_api_call(port, "/v1/embeddings", request_dict)
         
         # Handle if the response is already in the OpenAI format
@@ -374,9 +379,18 @@ class ServiceHandler:
         """
         Make a non-streaming API call to the specified endpoint and return the JSON response.
         Includes retry logic for transient errors.
+        
+        For embeddings and chat completions endpoints, uses infinite timeout to prevent
+        Gateway Timeout errors, as these operations can take a long time for large inputs
+        or complex requests.
         """
         attempts = 0
         last_exception = None
+        
+        # Use infinite timeout for embeddings and chat completions to prevent Gateway Timeout errors
+        is_embeddings = "/embeddings" in endpoint
+        is_chat_completions = "/chat/completions" in endpoint
+        request_timeout = None if (is_embeddings or is_chat_completions) else Config.HTTP_TIMEOUT
         
         while attempts < retries:
             try:
@@ -384,7 +398,7 @@ class ServiceHandler:
                 response = await app.state.client.post(
                     f"http://localhost:{port}{endpoint}", 
                     json=data,
-                    timeout=Config.HTTP_TIMEOUT
+                    timeout=request_timeout  # Use None for infinite timeout
                 )
                 logger.info(f"Received response with status code: {response.status_code}")
                 
@@ -406,7 +420,7 @@ class ServiceHandler:
                         logger.info("Detected issue with tool calls, will retry")
                         attempts += 1
                         # Use exponential backoff before retry
-                        sleep_time = (2 ** attempts) + (0.1 * random.random())
+                        sleep_time = (2 ** attempts) + (random.random() * 2)
                         await asyncio.sleep(sleep_time)
                         continue
                     
@@ -420,7 +434,10 @@ class ServiceHandler:
             
             # Exponential backoff with jitter
             if attempts < retries - 1:  # Don't sleep after the last attempt
-                sleep_time = (2 ** attempts) + (0.1 * random.random())
+                # Use longer sleep times for embedding endpoints since they're more resource-intensive
+                base_sleep = 5 if is_embeddings else 2
+                sleep_time = (base_sleep ** (attempts + 1)) + (random.random() * 5)
+                logger.info(f"Retrying in {sleep_time:.2f} seconds...")
                 await asyncio.sleep(sleep_time)
             
             attempts += 1
@@ -436,13 +453,15 @@ class ServiceHandler:
         """
         Generator for streaming responses from the service.
         Yields chunks of data as they are received, formatted for SSE (Server-Sent Events).
+        Uses an infinite timeout to allow for slow model responses.
         """
         try:
+            logger.info(f"Starting streaming request to port {port}")
             async with app.state.client.stream(
                 "POST", 
                 f"http://localhost:{port}/v1/chat/completions", 
                 json=data,
-                timeout=None  # Streaming needs indefinite timeout
+                timeout=None  # Always use infinite timeout for streaming
             ) as response:
                 if response.status_code != 200:
                     error_text = await response.text()
@@ -450,10 +469,20 @@ class ServiceHandler:
                     logger.error(f"Streaming error: {response.status_code} - {error_text}")
                     yield error_msg
                     return
-                    
+                
+                logger.info("Streaming response started successfully")
+                chunk_count = 0
                 async for line in response.aiter_lines():
                     if line:
+                        chunk_count += 1
+                        if chunk_count % 50 == 0:  # Log every 50 chunks to avoid excessive logging
+                            logger.debug(f"Streaming chunk {chunk_count}")
                         yield f"{line}\n\n"
+                
+                logger.info(f"Streaming completed, sent {chunk_count} chunks")
+        except httpx.TimeoutException as e:
+            logger.error(f"Timeout during streaming: {e}")
+            yield f"data: {{\"error\":{{\"message\":\"Streaming timeout: {str(e)}\",\"code\":504}}}}\n\n"
         except Exception as e:
             logger.error(f"Error during streaming: {e}")
             yield f"data: {{\"error\":{{\"message\":\"{str(e)}\",\"code\":500}}}}\n\n"
@@ -463,6 +492,7 @@ class ServiceHandler:
         """
         Generate a fake streaming response for tool-based chat completions.
         This method simulates the streaming behavior by breaking a complete response into chunks.
+        Includes small sleep intervals to create a more realistic streaming experience.
         
         Args:
             formatted_response: The complete response to stream in chunks
@@ -488,6 +518,7 @@ class ServiceHandler:
         if not choices:
             # If no choices, return empty response and DONE
             yield f"data: {json.dumps({**base_chunk, 'choices': []})}\n\n"
+            await asyncio.sleep(0.1)  # Small delay before DONE
             yield "data: [DONE]\n\n"
             return
 
@@ -502,6 +533,7 @@ class ServiceHandler:
             for choice in choices
         ]
         yield f"data: {json.dumps({**base_chunk, 'choices': initial_choices})}\n\n"
+        await asyncio.sleep(0.2)  # Slight delay after role
 
         # Step 2: Chunk with content or tool_calls for all choices
         content_choices = []
@@ -535,6 +567,8 @@ class ServiceHandler:
                 
         if content_choices:
             yield f"data: {json.dumps({**base_chunk, 'choices': content_choices})}\n\n"
+            # Longer delay for content since it's the main part of the response
+            await asyncio.sleep(0.5)
 
         # Step 3: Final chunk with finish reason for all choices
         finish_choices = [
@@ -547,6 +581,7 @@ class ServiceHandler:
             for choice in choices
         ]
         yield f"data: {json.dumps({**base_chunk, 'choices': finish_choices})}\n\n"
+        await asyncio.sleep(0.2)  # Slight delay before DONE
 
         # Step 4: End of stream
         yield "data: [DONE]\n\n"
@@ -583,28 +618,28 @@ class RequestProcessor:
     async def worker():
         """
         Worker function to process requests from the queue sequentially.
-        Only one request is processed at a time.
+        Only one request is processed at a time for model-related endpoints (/v1/chat/completions and /v1/embeddings).
+        Other endpoints like /health are not locked.
         """
+        # Endpoints that need to be locked (only one request at a time)
+        locked_endpoints = [
+            "/v1/chat/completions", 
+            "/v1/embeddings",
+            "/chat/completions",
+            "/embeddings"
+        ]
+        
         while True:
             try:
                 endpoint, request_data, future = await RequestProcessor.queue.get()
                 
-                # Use the lock to ensure only one request is processed at a time
-                async with RequestProcessor.processing_lock:
-                    if endpoint in RequestProcessor.endpoint_handlers:
-                        model_cls, handler = RequestProcessor.endpoint_handlers[endpoint]
-                        try:
-                            logger.info(f"Processing request for endpoint: {endpoint}")
-                            request_obj = model_cls(**request_data)
-                            result = await handler(request_obj)
-                            future.set_result(result)
-                            logger.info(f"Completed request for endpoint: {endpoint}")
-                        except Exception as e:
-                            logger.error(f"Handler error for {endpoint}: {str(e)}")
-                            future.set_exception(e)
-                    else:
-                        logger.error(f"Endpoint not found: {endpoint}")
-                        future.set_exception(HTTPException(status_code=404, detail="Endpoint not found"))
+                # Only use the lock for specific endpoints
+                if endpoint in locked_endpoints:
+                    async with RequestProcessor.processing_lock:
+                        await RequestProcessor._process_single_request(endpoint, request_data, future)
+                else:
+                    # Process without lock for other endpoints like /health
+                    await RequestProcessor._process_single_request(endpoint, request_data, future)
                 
                 RequestProcessor.queue.task_done()
             except asyncio.CancelledError:
@@ -613,6 +648,24 @@ class RequestProcessor:
             except Exception as e:
                 logger.error(f"Worker error: {str(e)}")
                 # Continue working, don't crash the worker
+    
+    @staticmethod
+    async def _process_single_request(endpoint: str, request_data: dict, future: asyncio.Future):
+        """Helper method to process a single request without code duplication."""
+        if endpoint in RequestProcessor.endpoint_handlers:
+            model_cls, handler = RequestProcessor.endpoint_handlers[endpoint]
+            try:
+                logger.info(f"Processing request for endpoint: {endpoint}")
+                request_obj = model_cls(**request_data)
+                result = await handler(request_obj)
+                future.set_result(result)
+                logger.info(f"Completed request for endpoint: {endpoint}")
+            except Exception as e:
+                logger.error(f"Handler error for {endpoint}: {str(e)}")
+                future.set_exception(e)
+        else:
+            logger.error(f"Endpoint not found: {endpoint}")
+            future.set_exception(HTTPException(status_code=404, detail="Endpoint not found"))
 
 # Performance monitoring middleware
 @app.middleware("http")
@@ -637,12 +690,25 @@ async def startup_event():
     """
     Startup event handler: initialize the HTTP client and start the worker task.
     """
-    # Create an asynchronous HTTP client with connection pooling
+    # Create an asynchronous HTTP client with connection pooling and better defaults
     limits = httpx.Limits(
         max_connections=Config.POOL_CONNECTIONS,
         max_keepalive_connections=Config.POOL_CONNECTIONS
     )
-    app.state.client = httpx.AsyncClient(limits=limits, timeout=Config.HTTP_TIMEOUT)
+    
+    # Use a longer default timeout but allow individual requests to override
+    timeout = httpx.Timeout(
+        connect=30.0,  # Connection timeout
+        read=None,     # Read timeout - None means no timeout
+        write=30.0,    # Write timeout
+        pool=None      # Pool timeout - None means no timeout
+    )
+    
+    app.state.client = httpx.AsyncClient(
+        limits=limits, 
+        timeout=timeout,
+        follow_redirects=True
+    )
     
     # Start the worker
     app.state.worker_task = asyncio.create_task(RequestProcessor.worker())
@@ -783,7 +849,10 @@ async def chat_completions(request: ChatCompletionRequest):
     Endpoint for chat completion requests.
     Processes the request, checks for vision content, fixes message order, and generates the response.
     """
-    return await handle_completion_request(request, "/chat/completions")
+    # Convert to dict, supporting both Pydantic v1 and v2
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    # Use the process_request method with the appropriate endpoint
+    return await RequestProcessor.process_request("/chat/completions", request_dict)
 
 @app.post("/embeddings")
 async def embeddings(request: EmbeddingRequest):
@@ -791,18 +860,27 @@ async def embeddings(request: EmbeddingRequest):
     Endpoint for embedding requests.
     Generates embeddings using the specified model.
     """
-    return await ServiceHandler.generate_embeddings_response(request)
+    # Convert to dict, supporting both Pydantic v1 and v2
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    # Use the process_request method with the appropriate endpoint
+    return await RequestProcessor.process_request("/embeddings", request_dict)
 
 @app.post("/v1/chat/completions")
 async def v1_chat_completions(request: ChatCompletionRequest):
     """
     Endpoint for chat completion requests (v1 API).
     """
-    return await handle_completion_request(request, "/v1/chat/completions")
+    # Convert to dict, supporting both Pydantic v1 and v2
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    # Use the process_request method to properly apply the lock
+    return await RequestProcessor.process_request("/v1/chat/completions", request_dict)
 
 @app.post("/v1/embeddings")
 async def v1_embeddings(request: EmbeddingRequest):
     """
     Endpoint for embedding requests (v1 API).
     """
-    return await ServiceHandler.generate_embeddings_response(request)
+    # Convert to dict, supporting both Pydantic v1 and v2
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    # Use the process_request method to properly apply the lock
+    return await RequestProcessor.process_request("/v1/embeddings", request_dict)
