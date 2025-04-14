@@ -332,13 +332,13 @@ class LocalLLMManager:
             # Use a single session for connection pooling
             with requests.Session() as session:
                 try:
-                    llm_status = session.get(f"http://localhost:{llm_port}/health", timeout=2)
+                    llm_status = session.get(f"http://localhost:{llm_port}/health", timeout=120)
                     llm_healthy = llm_status.status_code == 200
                 except requests.exceptions.RequestException:
                     pass
             
                 try:
-                    app_status = session.get(f"http://localhost:{app_port}/v1/health", timeout=2)
+                    app_status = session.get(f"http://localhost:{app_port}/v1/health", timeout=120)
                     api_healthy = app_status.status_code == 200
                 except requests.exceptions.RequestException:
                     pass
@@ -360,102 +360,6 @@ class LocalLLMManager:
         except Exception as e:
             logger.error(f"Error getting running model: {str(e)}")
             return None
-    
-    def unload_model(self) -> bool:
-        """
-        Unload the model from memory but keep the server running.
-        
-        Returns:
-            bool: True if model was unloaded successfully, False otherwise.
-        """
-        if not self.pickle_file.exists():
-            logger.warning("No running LLM service to unload.")
-            return False
-            
-        try:
-            # Load service details from the pickle file
-            with open(self.pickle_file, "rb") as f:
-                service_info = pickle.load(f)
-                
-            app_port = service_info.get("app_port")
-            
-            # Send unload signal to the API
-            unload_url = f"http://localhost:{app_port}/unload"
-            try:
-                response = requests.post(unload_url, timeout=10)
-                if response.status_code == 200:
-                    logger.info("Model unloaded from memory successfully.")
-                    
-                    # Force garbage collection to free memory
-                    gc.collect()
-                    
-                    # Update pickle file with unloaded state
-                    service_info["unloaded"] = True
-                    with open(self.pickle_file, "wb") as f:
-                        pickle.dump(service_info, f)
-                        
-                    return True
-                else:
-                    logger.error(f"Failed to unload model: {response.text}")
-                    return False
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Error unloading model: {str(e)}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error during model unload: {str(e)}")
-            return False
-
-    def reload_model(self) -> bool:
-        """
-        Reload a previously unloaded model.
-        
-        Returns:
-            bool: True if model was reloaded successfully, False otherwise.
-        """
-        if not self.pickle_file.exists():
-            logger.warning("No model service to reload.")
-            return False
-            
-        try:
-            # Load service details
-            with open(self.pickle_file, "rb") as f:
-                service_info = pickle.load(f)
-                
-            if not service_info.get("unloaded", False):
-                logger.info("Model is not unloaded, no need to reload.")
-                return True
-                
-            app_port = service_info.get("app_port")
-            model_path = service_info.get("local_text_path")
-            
-            # Send reload signal to the API
-            reload_url = f"http://localhost:{app_port}/reload"
-            payload = {"model_path": model_path}
-            
-            try:
-                response = requests.post(reload_url, json=payload, timeout=60)
-                if response.status_code == 200:
-                    logger.info("Model reloaded successfully.")
-                    
-                    # Update pickle file with loaded state
-                    service_info["unloaded"] = False
-                    service_info["last_activity"] = time.time()
-                    self.update_activity()
-                    with open(self.pickle_file, "wb") as f:
-                        pickle.dump(service_info, f)
-                        
-                    return True
-                else:
-                    logger.error(f"Failed to reload model: {response.text}")
-                    return False
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Error reloading model: {str(e)}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error during model reload: {str(e)}")
-            return False
 
     def stop(self) -> bool:
         """
@@ -479,33 +383,88 @@ class LocalLLMManager:
             app_port = service_info.get("app_port")
 
             logger.info(f"Stopping LLM service '{hash}' running on port {app_port} (PID: {app_pid})...")
+            
+            processes_terminated = False
+            max_attempts = 3
+            attempt = 0
+            
+            while not processes_terminated and attempt < max_attempts:
+                attempt += 1
+                logger.info(f"Termination attempt {attempt}/{max_attempts}")
                 
-            # Terminate process by PID
-            if psutil.pid_exists(pid):
-                process = psutil.Process(pid)
-                process.terminate()
-                process.wait(timeout=120)  # Allow process to shut down gracefully
-                
-                if process.is_running():  # Force kill if still alive
-                    logger.warning("Process did not terminate, forcing kill.")
-                    process.kill()
+                # Terminate LLM process by PID
+                if pid and psutil.pid_exists(pid):
+                    try:
+                        process = psutil.Process(pid)
+                        # First try graceful termination
+                        process.terminate()
+                        try:
+                            process.wait(timeout=120)  # Wait up to 120 seconds for graceful shutdown
+                        except psutil.TimeoutExpired:
+                            logger.warning("LLM process did not terminate gracefully, forcing kill")
+                            process.kill()
+                            process.wait(timeout=120)  # Wait up to 120 seconds after kill
+                            
+                        # Verify process is really dead
+                        if process.is_running():
+                            logger.warning("LLM process still running after kill, attempting to force kill")
+                            os.kill(pid, signal.SIGKILL)
+                            time.sleep(2)  # Give OS time to process the kill signal
+                    except psutil.NoSuchProcess:
+                        logger.info("LLM process already terminated")
+                    except Exception as e:
+                        logger.error(f"Error terminating LLM process: {str(e)}")
 
-            # Terminate FastAPI app by PID
-            if psutil.pid_exists(app_pid):
-                app_process = psutil.Process(app_pid)
-                app_process.terminate()
-                app_process.wait(timeout=120)  # Allow process to shut down gracefully
-                
-                if app_process.is_running():  # Force kill if still alive
-                    logger.warning("API process did not terminate, forcing kill.")
-                    app_process.kill()
+                # Terminate FastAPI app by PID
+                if app_pid and psutil.pid_exists(app_pid):
+                    try:
+                        app_process = psutil.Process(app_pid)
+                        # First try graceful termination
+                        app_process.terminate()
+                        try:
+                            app_process.wait(timeout=120)  # Wait up to 120 seconds for graceful shutdown
+                        except psutil.TimeoutExpired:
+                            logger.warning("API process did not terminate gracefully, forcing kill")
+                            app_process.kill()
+                            app_process.wait(timeout=120)  # Wait up to 10 seconds after kill
+                            
+                        # Verify process is really dead
+                        if app_process.is_running():
+                            logger.warning("API process still running after kill, attempting to force kill")
+                            os.kill(app_pid, signal.SIGKILL)
+                            time.sleep(2)  # Give OS time to process the kill signal
+                    except psutil.NoSuchProcess:
+                        logger.info("API process already terminated")
+                    except Exception as e:
+                        logger.error(f"Error terminating API process: {str(e)}")
 
+                # Verify all processes are really dead
+                processes_terminated = True
+                if pid and psutil.pid_exists(pid):
+                    processes_terminated = False
+                    logger.warning(f"LLM process {pid} still exists after termination attempt")
+                if app_pid and psutil.pid_exists(app_pid):
+                    processes_terminated = False
+                    logger.warning(f"API process {app_pid} still exists after termination attempt")
+                
+                if not processes_terminated:
+                    time.sleep(5)  # Wait before next attempt
+            
             # Force garbage collection to free memory
             gc.collect()
 
-            # Remove the tracking file
-            os.remove(self.pickle_file)
-            logger.info("LLM service stopped successfully.")
+            # Remove the tracking file only if all processes are terminated
+            if processes_terminated:
+                try:
+                    os.remove(self.pickle_file)
+                    logger.info("LLM service stopped successfully.")
+                except Exception as e:
+                    logger.error(f"Error removing tracking file: {str(e)}")
+                    return False
+            else:
+                logger.error("Failed to terminate all processes after maximum attempts")
+                return False
+
             return True
 
         except Exception as e:
