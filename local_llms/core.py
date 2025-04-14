@@ -182,10 +182,10 @@ class LocalLLMManager:
                         response_json = response.json()
                         service_metadata["family"] = response_json.get("family", "")
                         folder_name = response_json["folder_name"]
-                        is_gemma = True if folder_name.startswith("gemma") else False
+                        is_gemma = True if "gemma" in folder_name.lower() else False
                         break
                 except requests.exceptions.RequestException:
-                    time.sleep(2)  # Delay between retries
+                    time.sleep(5)  # Delay between retries
 
             if is_gemma:
                 # Use pkg_resources to get the absolute path to the template file

@@ -76,22 +76,6 @@ class ChatCompletionRequest(BaseModel):
                     return True
         return False
 
-    def fix_message_order(self) -> None:
-        if not self.messages:
-            return
-        fixed_messages = []
-        if self.messages[0].get("role") == "system":
-            self.messages.pop(0)
-            fixed_messages.append(
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant capable of using tools when necessary. Respond in natural language when tools are not required."
-                }
-            )
-        for msg in self.messages:
-            fixed_messages.append(msg)
-        self.messages = fixed_messages
-
 class ChatCompletionResponseChoice(BaseModel):
     """Model for a single choice in a chat completion response."""
     index: int
