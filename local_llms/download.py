@@ -8,15 +8,19 @@ from pathlib import Path
 from local_llms.utils import compute_file_hash, async_extract_zip, async_move, async_rmtree
 import random
 import threading
+import time
+from typing import List, Dict, Tuple, Optional, Union
 
 # Constants
 GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
 MAX_ATTEMPTS = 10
-CHUNK_SIZE = 4096
+CHUNK_SIZE = 1024 * 1024  # 1MB chunks for faster downloads
 POSTFIX_MODEL_PATH = ".gguf"
 MAX_FILE_SIZE = 600 * 1024 * 1024  # 600MB in bytes
+FLUSH_FREQUENCY = 0.1  # Flush to disk ~10% of chunks
+CHUNK_TIMEOUT = 60  # 60 seconds without data is a timeout
 
 # Global download progress tracker
 class DownloadProgressTracker:
@@ -28,20 +32,23 @@ class DownloadProgressTracker:
         self.last_update_time = None
         self.last_bytes_downloaded = 0
         self.download_speed = 0  # bytes per second
+        self._last_progress_print = 0
+        self._progress_print_interval = 1.0  # Print progress every second
     
     def initialize(self, total_bytes):
         with self.lock:
             self.total_bytes_to_download = total_bytes
             self.total_bytes_downloaded = 0
-            self.start_time = asyncio.get_event_loop().time()
+            self.start_time = time.time()
             self.last_update_time = self.start_time
             self.last_bytes_downloaded = 0
             self.download_speed = 0
+            self._last_progress_print = self.start_time
     
     def update(self, bytes_downloaded):
         with self.lock:
             self.total_bytes_downloaded += bytes_downloaded
-            current_time = asyncio.get_event_loop().time()
+            current_time = time.time()
             
             # Update download speed every second
             if current_time - self.last_update_time >= 1.0:
@@ -66,7 +73,18 @@ class DownloadProgressTracker:
             
             return progress_percent, downloaded_gb, total_gb, speed_mbps
     
+    def should_print_progress(self) -> bool:
+        """Check if it's time to print progress based on interval"""
+        current_time = time.time()
+        if current_time - self._last_progress_print >= self._progress_print_interval:
+            self._last_progress_print = current_time
+            return True
+        return False
+    
     def print_progress(self):
+        if not self.should_print_progress():
+            return
+            
         progress_percent, downloaded_gb, total_gb, speed_mbps = self.get_progress()
         if total_gb == 0:
             # If total size is not known, just show downloaded bytes and speed
@@ -157,9 +175,6 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
         try:
             url = f"{GATEWAY_URL}{cid}"
             
-            # Use a larger chunk size for faster downloads
-            chunk_size = 1024 * 1024  # 1MB chunks
-            
             # Set up headers for resume if needed
             headers = {}
             if resume_position > 0:
@@ -196,16 +211,15 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                     downloaded_bytes = resume_position
                     
                     # Add timeout protection for each chunk
-                    last_data_time = asyncio.get_event_loop().time()
-                    chunk_timeout = 60  # 60 seconds without data is a timeout
+                    last_data_time = time.time()
                     
                     # Open file in append mode if resuming, otherwise in write mode
                     mode = "ab" if resume_position > 0 else "wb"
                     with temp_path.open(mode) as f:
                         # Downloading with per-chunk timeout protection
-                        async for chunk in response.content.iter_chunked(chunk_size):
+                        async for chunk in response.content.iter_chunked(CHUNK_SIZE):
                             # Reset timeout timer when data is received
-                            last_data_time = asyncio.get_event_loop().time()
+                            last_data_time = time.time()
                             
                             # Check if this chunk would exceed the maximum file size
                             chunk_size_bytes = len(chunk)
@@ -227,14 +241,14 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                             downloaded_bytes += chunk_size_bytes
                             
                             # Regularly flush to disk to avoid data loss
-                            if random.random() < 0.1:  # ~10% of chunks
+                            if random.random() < FLUSH_FREQUENCY:
                                 f.flush()
                                 os.fsync(f.fileno())
                             
                             # Check if download has been idle
-                            current_time = asyncio.get_event_loop().time()
-                            if current_time - last_data_time > chunk_timeout:
-                                raise asyncio.TimeoutError(f"No data received for {chunk_timeout} seconds")
+                            current_time = time.time()
+                            if current_time - last_data_time > CHUNK_TIMEOUT:
+                                raise asyncio.TimeoutError(f"No data received for {CHUNK_TIMEOUT} seconds")
 
                     # Verify hash
                     computed_hash = compute_file_hash(temp_path)
@@ -298,10 +312,20 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     # Calculate total size for progress indication
     total_files = len(files)
     
-    # Calculate total bytes to download
+    # Calculate total bytes to download - use actual file sizes if available
     total_bytes = 0
-    # assume that each file is 512 MB
-    total_bytes = total_files * 512 * 1024 * 1024
+    if "file_sizes" in data and isinstance(data["file_sizes"], dict):
+        # Use actual file sizes if provided
+        for file_info in files:
+            cid = file_info["cid"]
+            if cid in data["file_sizes"]:
+                total_bytes += data["file_sizes"][cid]
+            else:
+                # Fallback to estimate if size not available
+                total_bytes += 512 * 1024 * 1024  # 512 MB estimate
+    else:
+        # Fallback to estimate
+        total_bytes = total_files * 512 * 1024 * 1024  # 512 MB per file estimate
 
     # Initialize the download tracker
     download_tracker.initialize(total_bytes)
@@ -481,15 +505,14 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                         raise Exception("Failed to download model files after all attempts")
                 
                 # Check if any files failed due to size limits
-                size_limit_failures = [error for error in failed_downloads if "exceeds maximum allowed size" in error]
-                if size_limit_failures:
-                    print(f"Download failed: {len(size_limit_failures)} files exceeded the maximum size limit of {MAX_FILE_SIZE / (1024 * 1024):.0f}MB")
+                if len(paths) < data["num_of_files"]:
+                    print(f"Some files failed to download: {len(paths)}/{data['num_of_files']} files downloaded")
                     if attempt < MAX_ATTEMPTS:
                         print(f"Retrying in {backoff} seconds")
                         await asyncio.sleep(backoff)
                         continue
                     else:
-                        raise Exception(f"Download failed: {len(size_limit_failures)} files exceeded the maximum size limit after all attempts")
+                        raise Exception(f"Failed to download all files after all attempts: {len(paths)}/{data['num_of_files']} files downloaded")
                 
                 # Track extracted files for cleanup
                 extracted_files = paths
@@ -535,7 +558,7 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                         
                         # Print download summary
                         progress_percent, downloaded_gb, total_gb, speed_mbps = download_tracker.get_progress()
-                        elapsed_time = asyncio.get_event_loop().time() - download_tracker.start_time
+                        elapsed_time = time.time() - download_tracker.start_time
                         hours, remainder = divmod(elapsed_time, 3600)
                         minutes, seconds = divmod(remainder, 60)
                         
