@@ -158,6 +158,10 @@ class ServiceHandler:
         Generate a response for chat completion requests, supporting both streaming and non-streaming.
         """
         port = await ServiceHandler.get_service_port()
+
+        request.fix_messages()
+        if request.is_vision_request():
+            raise HTTPException(status_code=400, detail="This model does not support vision-based requests")
         
         # Convert to dict, supporting both Pydantic v1 and v2
         request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
