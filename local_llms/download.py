@@ -7,6 +7,7 @@ from tqdm import tqdm
 from pathlib import Path
 from local_llms.utils import compute_file_hash, async_extract_zip, async_move, async_rmtree
 import random
+import threading
 
 # Constants
 GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
@@ -15,6 +16,66 @@ SLEEP_TIME = 60
 MAX_ATTEMPTS = 10
 CHUNK_SIZE = 4096
 POSTFIX_MODEL_PATH = ".gguf"
+MAX_FILE_SIZE = 600 * 1024 * 1024  # 600MB in bytes
+
+# Global download progress tracker
+class DownloadProgressTracker:
+    def __init__(self):
+        self.total_bytes_downloaded = 0
+        self.total_bytes_to_download = 0
+        self.lock = threading.Lock()
+        self.start_time = None
+        self.last_update_time = None
+        self.last_bytes_downloaded = 0
+        self.download_speed = 0  # bytes per second
+    
+    def initialize(self, total_bytes):
+        with self.lock:
+            self.total_bytes_to_download = total_bytes
+            self.total_bytes_downloaded = 0
+            self.start_time = asyncio.get_event_loop().time()
+            self.last_update_time = self.start_time
+            self.last_bytes_downloaded = 0
+            self.download_speed = 0
+    
+    def update(self, bytes_downloaded):
+        with self.lock:
+            self.total_bytes_downloaded += bytes_downloaded
+            current_time = asyncio.get_event_loop().time()
+            
+            # Update download speed every second
+            if current_time - self.last_update_time >= 1.0:
+                time_diff = current_time - self.last_update_time
+                bytes_diff = self.total_bytes_downloaded - self.last_bytes_downloaded
+                self.download_speed = bytes_diff / time_diff
+                self.last_update_time = current_time
+                self.last_bytes_downloaded = self.total_bytes_downloaded
+    
+    def get_progress(self):
+        with self.lock:
+            if self.total_bytes_to_download == 0:
+                # If total size is not known, just show downloaded bytes and speed
+                downloaded_gb = self.total_bytes_downloaded / (1024 * 1024 * 1024)
+                speed_mbps = self.download_speed / (1024 * 1024)  # MB/s
+                return 0, downloaded_gb, 0, speed_mbps
+            
+            progress_percent = (self.total_bytes_downloaded / self.total_bytes_to_download) * 100
+            downloaded_gb = self.total_bytes_downloaded / (1024 * 1024 * 1024)
+            total_gb = self.total_bytes_to_download / (1024 * 1024 * 1024)
+            speed_mbps = self.download_speed / (1024 * 1024)  # MB/s
+            
+            return progress_percent, downloaded_gb, total_gb, speed_mbps
+    
+    def print_progress(self):
+        progress_percent, downloaded_gb, total_gb, speed_mbps = self.get_progress()
+        if total_gb == 0:
+            # If total size is not known, just show downloaded bytes and speed
+            print(f"\rTotal Downloaded: {downloaded_gb:.2f}GB - Speed: {speed_mbps:.2f} MB/s", end="")
+        else:
+            print(f"\rTotal Progress: {progress_percent:.2f}% ({downloaded_gb:.2f}GB / {total_gb:.2f}GB) - Speed: {speed_mbps:.2f} MB/s", end="")
+
+# Create a global instance
+download_tracker = DownloadProgressTracker()
 
 def check_downloaded_model(filecoin_hash: str, output_dir: Path = DEFAULT_OUTPUT_DIR) -> bool:
     """
@@ -122,30 +183,48 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                                 # If parsing fails, use resume_position + content-length
                                 total_size += resume_position
                     
+                    # Check if file size exceeds the maximum allowed size
+                    if total_size > MAX_FILE_SIZE:
+                        error_msg = f"File {cid} exceeds maximum allowed size of {MAX_FILE_SIZE / (1024 * 1024):.0f}MB (actual: {total_size / (1024 * 1024):.0f}MB)"
+                        print(error_msg)
+                        # Delete any partial download
+                        if temp_path.exists():
+                            temp_path.unlink(missing_ok=True)
+                        return None, error_msg
+                    
+                    # Track downloaded bytes to ensure we don't exceed the limit
+                    downloaded_bytes = resume_position
+                    
+                    # Add timeout protection for each chunk
+                    last_data_time = asyncio.get_event_loop().time()
+                    chunk_timeout = 60  # 60 seconds without data is a timeout
+                    
                     # Open file in append mode if resuming, otherwise in write mode
                     mode = "ab" if resume_position > 0 else "wb"
-                    
-                    # Prepare progress bar
-                    with temp_path.open(mode) as f, tqdm(
-                        total=total_size,
-                        initial=resume_position,
-                        unit="B",
-                        unit_scale=True,
-                        desc=f"Downloading {file_name}",
-                        ncols=80
-                    ) as progress:
-                        # Add timeout protection for each chunk
-                        last_data_time = asyncio.get_event_loop().time()
-                        chunk_timeout = 60  # 60 seconds without data is a timeout
-                        
+                    with temp_path.open(mode) as f:
                         # Downloading with per-chunk timeout protection
                         async for chunk in response.content.iter_chunked(chunk_size):
                             # Reset timeout timer when data is received
                             last_data_time = asyncio.get_event_loop().time()
                             
+                            # Check if this chunk would exceed the maximum file size
+                            chunk_size_bytes = len(chunk)
+                            if downloaded_bytes + chunk_size_bytes > MAX_FILE_SIZE:
+                                error_msg = f"File {cid} would exceed maximum allowed size of {MAX_FILE_SIZE / (1024 * 1024):.0f}MB"
+                                print(error_msg)
+                                # Delete the partial download
+                                if temp_path.exists():
+                                    temp_path.unlink(missing_ok=True)
+                                return None, error_msg
+                            
                             # Write chunk and update progress
                             f.write(chunk)
-                            progress.update(len(chunk))
+                            
+                            # Update global download tracker
+                            download_tracker.update(chunk_size_bytes)
+                            
+                            # Update downloaded bytes counter
+                            downloaded_bytes += chunk_size_bytes
                             
                             # Regularly flush to disk to avoid data loss
                             if random.random() < 0.1:  # ~10% of chunks
@@ -219,6 +298,14 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     # Calculate total size for progress indication
     total_files = len(files)
     
+    # Calculate total bytes to download
+    total_bytes = 0
+    # assume that each file is 512 MB
+    total_bytes = total_files * 512 * 1024 * 1024
+
+    # Initialize the download tracker
+    download_tracker.initialize(total_bytes)
+    
     # Use semaphore to limit concurrent downloads
     max_concurrent_downloads = min(os.cpu_count() * 2, 8)
     semaphore = asyncio.Semaphore(max_concurrent_downloads)
@@ -232,6 +319,15 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     timeout = aiohttp.ClientTimeout(total=None, connect=60, sock_connect=60, sock_read=120)
     
     print(f"Downloading {total_files} files with max {max_concurrent_downloads} concurrent downloads")
+    print(f"Maximum file size limit: {MAX_FILE_SIZE / (1024 * 1024):.0f}MB per file")
+    
+    # Start a task to periodically print the total progress
+    async def print_total_progress():
+        while True:
+            download_tracker.print_progress()
+            await asyncio.sleep(1)
+    
+    progress_task = asyncio.create_task(print_total_progress())
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         # Create tasks
@@ -243,6 +339,7 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
         # Track overall progress
         successful_downloads = []
         failed_downloads = []
+        size_limit_failures = []
         
         # Use as_completed to process files as they complete
         for i, future in enumerate(asyncio.as_completed(tasks), 1):
@@ -250,14 +347,28 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
                 path, error = await future
                 if path:
                     successful_downloads.append(path)
-                    print(f"[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {len(successful_downloads)}/{num_of_files} --hash {filecoin_hash}")
+                    print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {len(successful_downloads)}/{num_of_files} --hash {filecoin_hash}")
                     print(f"Progress: {len(successful_downloads)}/{total_files} files downloaded")
                 else:
                     failed_downloads.append(error)
-                    print(f"Download failed: {error}")
+                    # Check if this was a size limit failure
+                    if error and "exceeds maximum allowed size" in error:
+                        size_limit_failures.append(error)
+                    print(f"\nDownload failed: {error}")
             except Exception as e:
-                print(f"Unexpected error in download task: {e}")
+                print(f"\nUnexpected error in download task: {e}")
                 failed_downloads.append(str(e))
+        
+        # Cancel the progress printing task
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+        
+        # Print final progress
+        download_tracker.print_progress()
+        print()  # New line after progress
         
         # Check if all downloads were successful
         if len(successful_downloads) == num_of_files:
@@ -265,6 +376,13 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
             return successful_downloads
         else:
             print(f"Downloaded {len(successful_downloads)} out of {num_of_files} files.")
+            if size_limit_failures:
+                print(f"Size limit failures ({len(size_limit_failures)}):")
+                for i, error in enumerate(size_limit_failures[:5], 1):
+                    print(f"  {i}. {error}")
+                if len(size_limit_failures) > 5:
+                    print(f"  ... and {len(size_limit_failures) - 5} more size limit failures")
+            
             if failed_downloads:
                 print(f"Failed downloads ({len(failed_downloads)}):")
                 for i, error in enumerate(failed_downloads[:5], 1):
@@ -362,6 +480,17 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                     else:
                         raise Exception("Failed to download model files after all attempts")
                 
+                # Check if any files failed due to size limits
+                size_limit_failures = [error for error in failed_downloads if "exceeds maximum allowed size" in error]
+                if size_limit_failures:
+                    print(f"Download failed: {len(size_limit_failures)} files exceeded the maximum size limit of {MAX_FILE_SIZE / (1024 * 1024):.0f}MB")
+                    if attempt < MAX_ATTEMPTS:
+                        print(f"Retrying in {backoff} seconds")
+                        await asyncio.sleep(backoff)
+                        continue
+                    else:
+                        raise Exception(f"Download failed: {len(size_limit_failures)} files exceeded the maximum size limit after all attempts")
+                
                 # Track extracted files for cleanup
                 extracted_files = paths
                 
@@ -403,6 +532,17 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                             await async_rmtree(str(folder_path))
                         
                         print(f"Model download complete: {local_path_str}")
+                        
+                        # Print download summary
+                        progress_percent, downloaded_gb, total_gb, speed_mbps = download_tracker.get_progress()
+                        elapsed_time = asyncio.get_event_loop().time() - download_tracker.start_time
+                        hours, remainder = divmod(elapsed_time, 3600)
+                        minutes, seconds = divmod(remainder, 60)
+                        
+                        print("\nDownload Summary:")
+                        print(f"  Total Size: {total_gb:.2f} GB")
+                        print(f"  Download Time: {int(hours)}h {int(minutes)}m {int(seconds)}s")
+                        print(f"  Average Speed: {speed_mbps:.2f} MB/s")
                         
                         # Update tracking file to remove this hash
                         with open(tracking_path, "wb") as f:
