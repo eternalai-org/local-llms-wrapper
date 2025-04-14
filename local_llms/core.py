@@ -12,6 +12,7 @@ import gc
 import signal
 import pkg_resources
 from local_llms.download import download_model_from_filecoin_async
+import sys
 
 class LocalLLMManager:
     """Manages a local Large Language Model (LLM) service."""
@@ -20,6 +21,20 @@ class LocalLLMManager:
         """Initialize the LocalLLMManager."""       
         self.pickle_file = Path(os.getenv("RUNNING_SERVICE_FILE", "running_service.pkl"))
         self.loaded_models: Dict[str, Any] = {}
+        self._setup_signal_handlers()
+
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for graceful shutdown."""
+        signal.signal(signal.SIGINT, self._handle_termination)
+        signal.signal(signal.SIGTERM, self._handle_termination)
+        signal.signal(signal.SIGHUP, self._handle_termination)
+
+    def _handle_termination(self, signum, frame):
+        """Handle termination signals."""
+        logger.info(f"Received termination signal {signum}, initiating graceful shutdown...")
+        self.stop()
+        # Exit with success status
+        sys.exit(0)
 
     def _wait_for_service(self, port: int, timeout: int = 600) -> bool:
         """
@@ -37,7 +52,7 @@ class LocalLLMManager:
         wait_time = 1  # Initial wait time in seconds
         while time.time() - start_time < timeout:
             try:
-                status = requests.get(health_check_url, timeout=5)
+                status = requests.get(health_check_url, timeout=30)
                 if status.status_code == 200 and (status.json().get("status") == "ok" or status.json().get("status") == "starting"):
                     logger.debug(f"Service healthy at {health_check_url}")
                     return True
@@ -388,66 +403,42 @@ class LocalLLMManager:
             max_attempts = 3
             attempt = 0
             
+            def terminate_process_group(pid):
+                """Terminate a process and its entire process group."""
+                try:
+                    if pid and psutil.pid_exists(pid):
+                        process = psutil.Process(pid)
+                        # Get the process group ID
+                        pgid = os.getpgid(pid)
+                        # Send SIGTERM to the entire process group
+                        os.killpg(pgid, signal.SIGTERM)
+                        # Wait for processes to terminate
+                        for _ in range(30):  # Wait up to 30 seconds
+                            if not psutil.pid_exists(pid):
+                                return True
+                            time.sleep(1)
+                        # If still running, send SIGKILL
+                        os.killpg(pgid, signal.SIGKILL)
+                        time.sleep(1)
+                        return not psutil.pid_exists(pid)
+                except Exception as e:
+                    logger.error(f"Error terminating process group {pid}: {str(e)}")
+                    return False
+                return True
+
             while not processes_terminated and attempt < max_attempts:
                 attempt += 1
                 logger.info(f"Termination attempt {attempt}/{max_attempts}")
                 
-                # Terminate LLM process by PID
-                if pid and psutil.pid_exists(pid):
-                    try:
-                        process = psutil.Process(pid)
-                        # First try graceful termination
-                        process.terminate()
-                        try:
-                            process.wait(timeout=120)  # Wait up to 120 seconds for graceful shutdown
-                        except psutil.TimeoutExpired:
-                            logger.warning("LLM process did not terminate gracefully, forcing kill")
-                            process.kill()
-                            process.wait(timeout=120)  # Wait up to 120 seconds after kill
-                            
-                        # Verify process is really dead
-                        if process.is_running():
-                            logger.warning("LLM process still running after kill, attempting to force kill")
-                            os.kill(pid, signal.SIGKILL)
-                            time.sleep(2)  # Give OS time to process the kill signal
-                    except psutil.NoSuchProcess:
-                        logger.info("LLM process already terminated")
-                    except Exception as e:
-                        logger.error(f"Error terminating LLM process: {str(e)}")
-
-                # Terminate FastAPI app by PID
-                if app_pid and psutil.pid_exists(app_pid):
-                    try:
-                        app_process = psutil.Process(app_pid)
-                        # First try graceful termination
-                        app_process.terminate()
-                        try:
-                            app_process.wait(timeout=120)  # Wait up to 120 seconds for graceful shutdown
-                        except psutil.TimeoutExpired:
-                            logger.warning("API process did not terminate gracefully, forcing kill")
-                            app_process.kill()
-                            app_process.wait(timeout=120)  # Wait up to 10 seconds after kill
-                            
-                        # Verify process is really dead
-                        if app_process.is_running():
-                            logger.warning("API process still running after kill, attempting to force kill")
-                            os.kill(app_pid, signal.SIGKILL)
-                            time.sleep(2)  # Give OS time to process the kill signal
-                    except psutil.NoSuchProcess:
-                        logger.info("API process already terminated")
-                    except Exception as e:
-                        logger.error(f"Error terminating API process: {str(e)}")
-
+                # Terminate both processes and their children
+                llm_terminated = terminate_process_group(pid)
+                api_terminated = terminate_process_group(app_pid)
+                
                 # Verify all processes are really dead
-                processes_terminated = True
-                if pid and psutil.pid_exists(pid):
-                    processes_terminated = False
-                    logger.warning(f"LLM process {pid} still exists after termination attempt")
-                if app_pid and psutil.pid_exists(app_pid):
-                    processes_terminated = False
-                    logger.warning(f"API process {app_pid} still exists after termination attempt")
+                processes_terminated = llm_terminated and api_terminated
                 
                 if not processes_terminated:
+                    logger.warning("Some processes still running, waiting before next attempt...")
                     time.sleep(5)  # Wait before next attempt
             
             # Force garbage collection to free memory
