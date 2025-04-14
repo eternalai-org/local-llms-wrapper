@@ -46,6 +46,25 @@ class ChatCompletionRequest(BaseModel):
             raise ValueError("messages cannot be empty")
         return v
     
+    def fix_messages(self) -> None:
+        """
+        Fix the messages list to ensure it starts with a system message if it exists.
+        Also replaces null values with empty strings.
+        """
+        # First, replace null values with empty strings
+        for message in self.messages:
+            for key in message.keys():
+                if message[key] is None:
+                    message[key] = ""
+        
+        # Then, ensure the messages list starts with a system message if one exists
+        system_messages = [msg for msg in self.messages if msg.get("role") == "system"]
+        non_system_messages = [msg for msg in self.messages if msg.get("role") != "system"]
+        
+        if system_messages:
+            # If there are system messages, put the first one at the beginning
+            self.messages = [system_messages[0]] + non_system_messages
+    
     def is_vision_request(self) -> bool:
         """
         Check if the request includes image content, indicating a vision-based request.
