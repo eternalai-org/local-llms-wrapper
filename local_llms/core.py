@@ -20,46 +20,6 @@ class LocalLLMManager:
         """Initialize the LocalLLMManager."""       
         self.pickle_file = Path(os.getenv("RUNNING_SERVICE_FILE", "running_service.pkl"))
         self.loaded_models: Dict[str, Any] = {}
-        self.idle_timeout = int(os.getenv("LLM_IDLE_TIMEOUT", "1800"))  # Default 30 minutes
-        self.last_activity = time.time()
-        self._initialize_activity_tracker()
-
-    def _initialize_activity_tracker(self):
-        """Initialize a background activity tracker."""
-        signal.signal(signal.SIGUSR1, self._handle_activity_signal)
-        
-        # Start idle checker in a separate thread if needed
-        if self.idle_timeout > 0:
-            import threading
-            self.activity_thread = threading.Thread(target=self._check_idle_status, daemon=True)
-            self.activity_thread.start()
-    
-    def _handle_activity_signal(self, signum, frame):
-        """Handle activity signal to update last activity time."""
-        self.last_activity = time.time()
-        logger.debug("Activity tracker updated")
-    
-    def track_activity(self):
-        """Mark the LLM as active."""
-        self.last_activity = time.time()
-    
-    def _check_idle_status(self):
-        """Background thread to check for idle status."""
-        while True:
-            time.sleep(60)  # Check every minute
-            
-            if not self.pickle_file.exists():
-                continue
-                
-            current_time = time.time()
-            idle_time = current_time - self.last_activity
-            
-            if idle_time > self.idle_timeout:
-                logger.info(f"Model has been idle for {idle_time:.1f} seconds, unloading...")
-                try:
-                    self.unload_model()
-                except Exception as e:
-                    logger.error(f"Error unloading idle model: {str(e)}")
 
     def _wait_for_service(self, port: int, timeout: int = 600) -> bool:
         """
@@ -140,9 +100,6 @@ class LocalLLMManager:
 
         try:
             logger.info(f"Starting local LLM service for model with hash: {hash}")
-            
-            # Reset activity timer when starting a new model
-            self.track_activity()
             
             local_model_path = asyncio.run(download_model_from_filecoin_async(hash))
             model_running = self.get_running_model()
@@ -338,7 +295,6 @@ class LocalLLMManager:
             
             # Update timestamp
             service_info["last_activity"] = time.time()
-            self.track_activity()
             
             # Save updated info
             with open(self.pickle_file, "wb") as f:
@@ -369,9 +325,6 @@ class LocalLLMManager:
             llm_port = service_info.get("port")
             context_length = service_info.get("context_length")
             
-            # Update activity timestamp
-            self.track_activity()
-            
             # Check both services with minimal timeout
             llm_healthy = False
             api_healthy = False
@@ -391,12 +344,10 @@ class LocalLLMManager:
                     pass
 
             if llm_healthy and api_healthy:
-                # Update the last activity timestamp whenever we verify a model is running
-                self.update_activity()
                 return model_hash
                 
             logger.warning(f"Service not healthy: LLM {llm_healthy}, API {api_healthy}")
-            self.stop()  
+            self.stop()
             try:
                 logger.info("Restarting service...")  
                 if self.start(model_hash, app_port, context_length=context_length):
@@ -490,7 +441,7 @@ class LocalLLMManager:
                     # Update pickle file with loaded state
                     service_info["unloaded"] = False
                     service_info["last_activity"] = time.time()
-                    self.track_activity()
+                    self.update_activity()
                     with open(self.pickle_file, "wb") as f:
                         pickle.dump(service_info, f)
                         
@@ -528,12 +479,6 @@ class LocalLLMManager:
             app_port = service_info.get("app_port")
 
             logger.info(f"Stopping LLM service '{hash}' running on port {app_port} (PID: {app_pid})...")
-
-            # Trigger unload first to properly release memory
-            try:
-                self.unload_model()
-            except:
-                pass
                 
             # Terminate process by PID
             if psutil.pid_exists(pid):
@@ -545,7 +490,7 @@ class LocalLLMManager:
                     logger.warning("Process did not terminate, forcing kill.")
                     process.kill()
 
-            # Terminate FastAPI app by PIDd
+            # Terminate FastAPI app by PID
             if psutil.pid_exists(app_pid):
                 app_process = psutil.Process(app_pid)
                 app_process.terminate()
@@ -589,7 +534,6 @@ class LocalLLMManager:
             result = {
                 "model_hash": model_hash,
                 "timestamp": time.time(),
-                "unloaded": service_info.get("unloaded", False),
                 "processes": {},
                 "system": {},
                 "rss_mb": 0,  # Total RSS across all processes
@@ -714,6 +658,6 @@ class LocalLLMManager:
             return result
             
         except Exception as e:
-            logger.error(f"Error getting memory usage: {str(e)}", exc_info=True)
-            return {"error": str(e)}
+            logger.error(f"Error getting memory usage: {str(e)}")
+            return None
         

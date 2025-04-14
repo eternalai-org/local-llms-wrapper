@@ -689,90 +689,18 @@ async def shutdown_event():
 @app.get("/v1/health")
 async def health():
     """
-    Health check endpoint.
-    Returns a simple status to indicate the service is running.
-    This endpoint bypasses the request queue for immediate response.
+    Health check endpoint for the API service.
     """
-    # Invalidate the service port cache periodically
-    get_cached_service_port.cache_clear()
-    
-    # Check if the service info is set
-    if not hasattr(app.state, "service_info"):
-        return {"status": "starting", "message": "Service info not set yet"}
-    
-    return {"status": "ok", "service": app.state.service_info.get("family", "unknown")}
-
-@app.post("/unload")
-async def unload_model():
-    """
-    Endpoint to unload the model from memory but keep the server running.
-    This helps reduce memory usage when the model is not actively being used.
-    This endpoint bypasses the request queue for immediate response.
-    """
-    try:
-        logger.info("Received request to unload model from memory")
-        
-        # Check if the service info is set
-        if not hasattr(app.state, "service_info"):
-            raise HTTPException(status_code=503, detail="Service info not set yet")
-            
-        # Perform model unloading operations
-        # This is a placeholder - actual implementation depends on the underlying model server
-        # For example, you might send a signal to the model server to release memory
-        
-        # For now, just log and return success
-        logger.info("Model has been unloaded from memory")
-        return {"status": "ok", "message": "Model unloaded successfully"}
-    except Exception as e:
-        logger.error(f"Error unloading model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to unload model: {str(e)}")
-
-@app.post("/reload")
-async def reload_model(model_path: dict):
-    """
-    Endpoint to reload a previously unloaded model.
-    This endpoint bypasses the request queue for immediate response.
-    
-    Args:
-        model_path (dict): Dictionary containing the model_path key with path to the model file
-    """
-    try:
-        logger.info(f"Received request to reload model from {model_path.get('model_path')}")
-        
-        # Check if the service info is set
-        if not hasattr(app.state, "service_info"):
-            raise HTTPException(status_code=503, detail="Service info not set yet")
-            
-        # Validate the model path
-        path = model_path.get("model_path")
-        if not path or not os.path.exists(path):
-            raise HTTPException(status_code=400, detail="Invalid or missing model path")
-            
-        # Perform model reloading operations
-        # This is a placeholder - actual implementation depends on the underlying model server
-        # For example, you might send a signal to the model server to reload the model
-        
-        # For now, just log and return success
-        logger.info(f"Model has been reloaded from {path}")
-        return {"status": "ok", "message": "Model reloaded successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error reloading model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to reload model: {str(e)}")
+    return {"status": "ok"}
 
 @app.post("/update")
-async def update(request: dict):
+async def update_service_info(service_info: dict):
     """
-    Update the service information in the app's state.
-    Stores the provided request data for use in determining the service port.
-    This endpoint bypasses the request queue for immediate response.
+    Update the service information.
+    This endpoint is used by the LocalLLMManager to update the service state.
     """
-    app.state.service_info = request
-    # Invalidate the cache when service info is updated
-    get_cached_service_port.cache_clear()
-    logger.info(f"Updated service info: {request.get('family', 'unknown')} on port {request.get('port', 'unknown')}")
-    return {"status": "ok", "message": "Service info updated successfully"}
+    app.state.service_info = service_info
+    return {"status": "ok"}
 
 # Modified endpoint handlers for model-based endpoints
 @app.post("/chat/completions")
