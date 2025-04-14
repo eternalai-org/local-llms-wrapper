@@ -130,7 +130,7 @@ class ServiceHandler:
                 # Create fixed message structure
                 fixed_message = message.copy()
                 fixed_message["tool_calls"] = tool_calls
-                fixed_message["content"] = None  # Set content to null
+                fixed_message["content"] = ""  # Set content to empty string instead of null
                 
                 # Update the choice with fixed message
                 fixed_choice = choice.copy()
