@@ -516,14 +516,14 @@ class ServiceHandler:
                     updated_tool_calls.append(tool_call)
                     updated_tool_calls[idx]["index"] = str(idx)
                 delta["tool_calls"] = updated_tool_calls
-                delta["reasoning_content"] = None
+                delta["reasoning_content"] = ""
             # For content responses
             elif message.get("content"):
                 delta["content"] = message["content"]
-                delta["reasoning_content"] = None
+                delta["reasoning_content"] = ""
             else:
                 # Empty content/null case
-                delta["reasoning_content"] = None
+                delta["reasoning_content"] = ""
                 
             if delta:  # Only include choices with content
                 content_choices.append({
