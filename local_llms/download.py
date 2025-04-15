@@ -21,7 +21,7 @@ CHUNK_SIZE = 1024*1024
 POSTFIX_MODEL_PATH = ".gguf"
 MAX_FILE_SIZE = 600 * 1024 * 1024  # 600MB in bytes
 FLUSH_FREQUENCY = 0.1  # Flush to disk ~10% of chunks
-CHUNK_TIMEOUT = 60  # 60 seconds without data is a timeout
+CHUNK_TIMEOUT = 300  # 300 seconds without data is a timeout
 
 # Create logger with NullHandler by default
 # This prevents duplicate logging and follows best practices
