@@ -100,14 +100,14 @@ class DownloadProgressTracker:
             
         progress_percent, downloaded_gb, total_gb, speed_mbps = self.get_progress()
         if total_gb == 0:
-            raise ValueError("Total size is not known")
+            logger.error("Total size is not known")
         else:            
             estimate_num_of_dowloaded_files = int((progress_percent / 100) * self.num_of_files)
             if len(self.prev_index) < int(estimate_num_of_dowloaded_files):
                 self.prev_index = int(estimate_num_of_dowloaded_files)
                 print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {estimate_num_of_dowloaded_files}/{self.num_of_files} --hash {self.filecoin_hash} --percent {progress_percent}%")
             else:
-                print(f"\rTotal Downloaded: {downloaded_gb:.2f}GB - Speed: {speed_mbps:.2f} MB/s", end="")
+                logger.debug(f"Total Downloaded: {downloaded_gb:.2f}GB - Speed: {speed_mbps:.2f} MB/s")
 # Create a global instance
 download_tracker = DownloadProgressTracker()
 
@@ -233,7 +233,7 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                         # Downloading with per-chunk timeout protection
                         flush_interval = 10
                         chunk_count = 0
-                        for chunk in response.content.iter_chunked(CHUNK_SIZE):
+                        async for chunk in response.content.iter_chunked(CHUNK_SIZE):
                             # Reset timeout timer when data is received
                             last_data_time = time.time()
                             
@@ -256,7 +256,7 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                             # Update downloaded bytes counter
                             downloaded_bytes += chunk_size_bytes
                             
-                            # Regularly flush to disk to avoid data loss
+                            # Flush to disk periodically
                             chunk_count += 1
                             if chunk_count % flush_interval == 0:
                                 f.flush()
