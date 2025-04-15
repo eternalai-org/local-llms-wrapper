@@ -276,6 +276,7 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                         logger.error(f"Hash mismatch for {cid}. Expected {expected_hash}, got {computed_hash}.")
                         # Always delete temp file on hash mismatch and start over on next attempt
                         temp_path.unlink(missing_ok=True)
+                        download_tracker.update(-temp_path.stat().st_size)
                         resume_position = 0
                 else:
                     logger.error(f"Failed to download {cid}. Status: {response.status}")
@@ -299,9 +300,8 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
         attempts += 1
         if attempts < max_attempts:
             logger.info(f"Retrying in {wait_time}s (Attempt {attempts + 1}/{max_attempts})")
-            temp_size = temp_path.stat().st_size
+            download_tracker.update(-temp_path.stat().st_size)
             temp_path.unlink(missing_ok=True)
-            download_tracker.update(-temp_size)            
             await asyncio.sleep(wait_time)
         else:
             logger.error(f"Failed to download {cid} after {max_attempts} attempts.")
