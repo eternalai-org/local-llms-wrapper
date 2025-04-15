@@ -176,8 +176,14 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
     # Check if we have a partial download to resume
     resume_position = 0
     if temp_path.exists():
-        temp_path.unlink(missing_ok=True)
-        resume_position = 0
+        try:
+            temp_size = temp_path.stat().st_size
+            if temp_size > 0:
+                logger.info(f"Resuming download of {file_name} from position {resume_position}")
+        except Exception as e:
+            logger.error(f"Error checking temporary file {cid}: {e}")
+            temp_path.unlink(missing_ok=True)
+            resume_position = 0
 
     while attempts < max_attempts:
         try:
@@ -269,11 +275,13 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                             file_path.unlink()
                         temp_path.rename(file_path)
                         logger.info(f"File {cid} downloaded and verified successfully.")
+                        download_tracker.update(file_path.stat().st_size)
                         return file_path, None
                     else:
                         logger.error(f"Hash mismatch for {cid}. Expected {expected_hash}, got {computed_hash}.")
                         # Don't delete temp file on hash mismatch, it may be corrupted but we can resume
                         # Just reset resume position to 0 to start over on next attempt
+                        temp_path.unlink(missing_ok=True)
                         resume_position = 0
                 else:
                     logger.error(f"Failed to download {cid}. Status: {response.status}")
