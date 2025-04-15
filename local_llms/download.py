@@ -176,15 +176,8 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
     # Check if we have a partial download to resume
     resume_position = 0
     if temp_path.exists():
-        try:
-            temp_size = temp_path.stat().st_size
-            if temp_size > 0:
-                resume_position = temp_size
-                logger.info(f"Resuming download of {file_name} from position {resume_position}")
-        except Exception as e:
-            logger.error(f"Error checking temporary file {cid}: {e}")
-            temp_path.unlink(missing_ok=True)
-            resume_position = 0
+        temp_path.unlink(missing_ok=True)
+        resume_position = 0
 
     while attempts < max_attempts:
         try:
