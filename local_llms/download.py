@@ -43,6 +43,7 @@ class DownloadProgressTracker:
         self.download_speed = 0  # bytes per second
         self._last_progress_print = 0
         self._progress_print_interval = 1.0  # Print progress every second
+        self.prev_index = 0
     
     def initialize(self, total_bytes, filecoin_hash, num_of_files):
         with self.lock:
@@ -102,9 +103,10 @@ class DownloadProgressTracker:
         progress_percent, _, total_gb, _ = self.get_progress()
         if total_gb == 0:
             logger.error("Total size is not known")
-        else:            
-            if int(progress_percent) % 5 == 0:
-                estimate_num_of_dowloaded_files = int((progress_percent / 100) * self.num_of_files)
+        else: 
+            estimate_num_of_dowloaded_files = int((progress_percent / 100) * self.num_of_files)
+            if self.prev_index < estimate_num_of_dowloaded_files:
+                self.prev_index = estimate_num_of_dowloaded_files
                 print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {estimate_num_of_dowloaded_files}/{self.num_of_files} --hash {self.filecoin_hash} --percent {progress_percent}%")
         
 # Create a global instance
