@@ -17,7 +17,7 @@ GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
 MAX_ATTEMPTS = 10
-CHUNK_SIZE = 1024 * 1024  # 1MB chunks for faster downloads
+CHUNK_SIZE = 1024
 POSTFIX_MODEL_PATH = ".gguf"
 MAX_FILE_SIZE = 600 * 1024 * 1024  # 600MB in bytes
 FLUSH_FREQUENCY = 0.1  # Flush to disk ~10% of chunks
@@ -37,11 +37,11 @@ class DownloadProgressTracker:
         self.start_time = None
         self.last_update_time = None
         self.last_bytes_downloaded = 0
-        self.download_speed = 0  # bytes per second
+        self.download_speed = 0
         self._last_progress_print = 0
-        self._progress_print_interval = 1.0  # Print progress every second
+        self._progress_print_interval = 1.0
         self.prev_index = -1
-    
+
     def initialize(self, total_bytes, filecoin_hash, num_of_files):
         with self.lock:
             self.total_bytes_to_download = total_bytes
@@ -53,58 +53,51 @@ class DownloadProgressTracker:
             self.last_bytes_downloaded = 0
             self.download_speed = 0
             self._last_progress_print = self.start_time
-            logger.info(f"Initialized download tracker for {num_of_files} files with total size {total_bytes} bytes.")
-    
+            logger.info(f"Initialized tracker for {num_of_files} files, {total_bytes} bytes.")
+
     def update(self, bytes_downloaded):
         with self.lock:
             self.total_bytes_downloaded += bytes_downloaded
             current_time = time.time()
-            
             if current_time - self.last_update_time >= 1.0:
                 time_diff = current_time - self.last_update_time
                 bytes_diff = self.total_bytes_downloaded - self.last_bytes_downloaded
                 self.download_speed = bytes_diff / time_diff
                 self.last_update_time = current_time
                 self.last_bytes_downloaded = self.total_bytes_downloaded
-    
+
     def get_progress(self):
         with self.lock:
             if self.total_bytes_to_download == 0:
-                # If total size is not known, just show downloaded bytes and speed
                 downloaded_gb = self.total_bytes_downloaded / (1024 * 1024 * 1024)
-                speed_mbps = self.download_speed / (1024 * 1024)  # MB/s
+                speed_mbps = self.download_speed / (1024 * 1024)
                 return 0, downloaded_gb, 0, speed_mbps
-            
             progress_percent = (self.total_bytes_downloaded / self.total_bytes_to_download) * 100
             downloaded_gb = self.total_bytes_downloaded / (1024 * 1024 * 1024)
             total_gb = self.total_bytes_to_download / (1024 * 1024 * 1024)
-            speed_mbps = self.download_speed / (1024 * 1024)  # MB/s
-            
+            speed_mbps = self.download_speed / (1024 * 1024)
             return progress_percent, downloaded_gb, total_gb, speed_mbps
-    
-    def should_print_progress(self) -> bool:
-        """Check if it's time to print progress based on interval"""
+
+    def should_print_progress(self):
         current_time = time.time()
         if current_time - self._last_progress_print >= self._progress_print_interval:
             self._last_progress_print = current_time
             return True
         return False
-    
+
     def print_progress(self):
         if not self.should_print_progress():
-            print("should_print_progress: False")
             return
-            
         progress_percent, _, total_gb, _ = self.get_progress()
         if total_gb == 0:
-            logger.error("Total size is not known")
-        else: 
-            estimate_num_of_dowloaded_files = int((progress_percent / 100) * self.num_of_files)
-            if self.prev_index < estimate_num_of_dowloaded_files:
-                self.prev_index = estimate_num_of_dowloaded_files
-                print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {estimate_num_of_dowloaded_files}/{self.num_of_files} --hash {self.filecoin_hash} --percent {progress_percent}%")
-        
-# Create a global instance
+            logger.error("Total size unknown")
+        else:
+            estimate_num_of_downloaded_files = int((progress_percent / 100) * self.num_of_files)
+            if self.prev_index < estimate_num_of_downloaded_files:
+                self.prev_index = estimate_num_of_downloaded_files
+                print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {estimate_num_of_downloaded_files}/{self.num_of_files} --hash {self.filecoin_hash} --percent {progress_percent:.1f}%")
+
+# Global tracker instance
 download_tracker = DownloadProgressTracker()
 
 def check_downloaded_model(filecoin_hash: str, output_dir: Path = DEFAULT_OUTPUT_DIR) -> bool:
