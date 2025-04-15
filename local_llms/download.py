@@ -103,6 +103,7 @@ class DownloadProgressTracker:
             logger.error("Total size is not known")
         else:            
             estimate_num_of_dowloaded_files = int((progress_percent / 100) * self.num_of_files)
+            print(f"estimate_num_of_dowloaded_files: {estimate_num_of_dowloaded_files}")
             if len(self.prev_index) < int(estimate_num_of_dowloaded_files):
                 self.prev_index = int(estimate_num_of_dowloaded_files)
                 print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {estimate_num_of_dowloaded_files}/{self.num_of_files} --hash {self.filecoin_hash} --percent {progress_percent}%")
