@@ -26,10 +26,13 @@ CHUNK_TIMEOUT = 60  # 60 seconds without data is a timeout
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-handler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+# Only add the handler if it doesn't already have handlers
+# This prevents duplicate logging when the module is imported multiple times
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 # Global download progress tracker
 class DownloadProgressTracker:
