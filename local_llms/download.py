@@ -96,6 +96,7 @@ class DownloadProgressTracker:
     
     def print_progress(self):
         if not self.should_print_progress():
+            print("should_print_progress: False")
             return
             
         progress_percent, downloaded_gb, total_gb, speed_mbps = self.get_progress()
