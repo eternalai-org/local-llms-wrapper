@@ -3,15 +3,17 @@ import shutil
 import logging
 from pathlib import Path
 
-# Configure logging
+# Configure logging only if it hasn't been configured elsewhere
+# This prevents duplicate logging when multiple modules import logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    force=True  # Use force=True in Python 3.8+ to reset any existing handlers
 )
 logger = logging.getLogger(__name__)
 
 """Local LLMs - A library to manage local language models."""
-__version__ = "2.0.16"
+__version__ = "2.0.17"
 
 # Import template functions for easier access
 

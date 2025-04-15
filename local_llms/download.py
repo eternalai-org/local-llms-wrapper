@@ -23,16 +23,10 @@ MAX_FILE_SIZE = 600 * 1024 * 1024  # 600MB in bytes
 FLUSH_FREQUENCY = 0.1  # Flush to disk ~10% of chunks
 CHUNK_TIMEOUT = 60  # 60 seconds without data is a timeout
 
+# Create logger with NullHandler by default
+# This prevents duplicate logging and follows best practices
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# Only add the handler if it doesn't already have handlers
-# This prevents duplicate logging when the module is imported multiple times
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+logger.addHandler(logging.NullHandler())
 
 # Global download progress tracker
 class DownloadProgressTracker:
