@@ -66,7 +66,6 @@ class DownloadProgressTracker:
                 self.download_speed = bytes_diff / time_diff
                 self.last_update_time = current_time
                 self.last_bytes_downloaded = self.total_bytes_downloaded
-                logger.debug(f"Download speed updated: {self.download_speed:.2f} bytes/sec")
     
     def get_progress(self):
         with self.lock:
