@@ -566,7 +566,7 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                         await async_move(str(source_text_path), local_path_str)
                         
                         # Clean up folder after successful move
-                        if folder_path.exists():
+                        if folder_path.exists() and os.path.exists(local_path_str):
                             logger.info(f"Cleaning up temporary folder {folder_path}")
                             await async_rmtree(str(folder_path))
                         
