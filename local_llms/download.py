@@ -167,23 +167,22 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                 logger.info(f"File {cid} already exists with correct hash.")
                 return file_path, None
             else:
-                logger.info(f"File {cid} exists but hash mismatch. Retrying...")
+                logger.info(f"File {cid} exists but hash mismatch. Will re-download from scratch.")
                 file_path.unlink(missing_ok=True)
+                # Also remove any temporary file to ensure a clean download
+                if temp_path.exists():
+                    temp_path.unlink(missing_ok=True)
         except Exception as e:
             logger.error(f"Error checking existing file {cid}: {e}")
             file_path.unlink(missing_ok=True)
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
-    # Check if we have a partial download to resume
+    # Always start from position 0 - no resuming of partial downloads
     resume_position = 0
     if temp_path.exists():
-        try:
-            temp_size = temp_path.stat().st_size
-            if temp_size > 0:
-                logger.info(f"Resuming download of {file_name} from position {resume_position}")
-        except Exception as e:
-            logger.error(f"Error checking temporary file {cid}: {e}")
-            temp_path.unlink(missing_ok=True)
-            resume_position = 0
+        logger.info(f"Removing existing temporary file for {file_name} to ensure clean download.")
+        temp_path.unlink(missing_ok=True)
 
     while attempts < max_attempts:
         try:
@@ -279,8 +278,7 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
                         return file_path, None
                     else:
                         logger.error(f"Hash mismatch for {cid}. Expected {expected_hash}, got {computed_hash}.")
-                        # Don't delete temp file on hash mismatch, it may be corrupted but we can resume
-                        # Just reset resume position to 0 to start over on next attempt
+                        # Always delete temp file on hash mismatch and start over on next attempt
                         temp_path.unlink(missing_ok=True)
                         resume_position = 0
                 else:
