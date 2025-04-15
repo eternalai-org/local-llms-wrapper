@@ -82,15 +82,8 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
     # Check if we have a partial download to resume
     resume_position = 0
     if temp_path.exists():
-        try:
-            temp_size = temp_path.stat().st_size
-            if temp_size > 0:
-                resume_position = temp_size
-                print(f"Resuming download of {file_name} from position {resume_position}")
-        except Exception as e:
-            print(f"Error checking temporary file {cid}: {e}")
-            temp_path.unlink(missing_ok=True)
-            resume_position = 0
+        temp_path.unlink(missing_ok=True)
+        resume_position = 0
 
     while attempts < max_attempts:
         try:
@@ -321,7 +314,6 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
     
     # Initialize variables outside the loop
     folder_path = None
-    extracted_files = []
     
     try:
         # Use exponential backoff for retries
