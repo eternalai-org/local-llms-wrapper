@@ -566,7 +566,7 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                         await async_move(str(source_text_path), local_path_str)
                         
                         # Clean up folder after successful move
-                        if folder_path.exists() and os.path.exists(local_path_str):
+                        if folder_path.exists():
                             logger.info(f"Cleaning up temporary folder {folder_path}")
                             await async_rmtree(str(folder_path))
                         
@@ -631,22 +631,6 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                 pickle.dump([f for f in downloading_files if f != filecoin_hash], f)
         except Exception as e:
             logger.error(f"Error updating tracking file: {e}")
-        
-        # Clean up any partial downloads
-        if folder_path and folder_path.exists():
-            try:
-                logger.info(f"Cleaning up folder {folder_path} after failure")
-                await async_rmtree(str(folder_path))
-            except Exception as e:
-                logger.error(f"Error cleaning up folder: {e}")
-        
-        # Remove any partially extracted files if download failed
-        for path in extracted_files:
-            if path.exists():
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception as e:
-                    logger.error(f"Error removing temporary file {path}: {e}")
 
     logger.error("All download attempts failed")
     return None
