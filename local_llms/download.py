@@ -56,7 +56,6 @@ class DownloadProgressTracker:
             self.last_bytes_downloaded = 0
             self.download_speed = 0
             self._last_progress_print = self.start_time
-            self.prev_index = 0
             logger.info(f"Initialized download tracker for {num_of_files} files with total size {total_bytes} bytes.")
     
     def update(self, bytes_downloaded):
