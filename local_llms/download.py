@@ -163,6 +163,7 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
         try:
             computed_hash = compute_file_hash(file_path)
             if computed_hash == expected_hash:
+                download_tracker.update(file_path.stat().st_size)
                 logger.info(f"File {cid} already exists with correct hash.")
                 return file_path, None
             else:
