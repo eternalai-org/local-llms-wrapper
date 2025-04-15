@@ -348,7 +348,8 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     download_tracker.initialize(total_bytes, filecoin_hash, num_of_files)
     
     # Use semaphore to limit concurrent downloads
-    max_concurrent_downloads = min(os.cpu_count() * 4, 8)
+    minimum_workers = min(os.cpu_count() * 2, 8)
+    max_concurrent_downloads = min(minimum_workers, num_of_files)
     logger.info(f"Max concurrent downloads set to {max_concurrent_downloads}")
     semaphore = asyncio.Semaphore(max_concurrent_downloads)
     
