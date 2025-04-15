@@ -3,28 +3,6 @@ import asyncio
 import argparse
 from pathlib import Path
 from loguru import logger
-import logging
-
-# Intercept standard logging with loguru
-class InterceptHandler(logging.Handler):
-    def emit(self, record):
-        # Get corresponding Loguru level if it exists
-        try:
-            level = logger.level(record.levelname).name
-        except ValueError:
-            level = record.levelno
-
-        # Find caller from where originated the logged message
-        frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back
-            depth += 1
-
-        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
-
-# Replace all handlers with Loguru
-logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
-
 from local_llms import __version__
 from local_llms.core import LocalLLMManager
 from local_llms.upload import upload_folder_to_lighthouse
