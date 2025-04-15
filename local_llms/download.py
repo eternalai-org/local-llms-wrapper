@@ -16,12 +16,12 @@ import logging
 GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
-MAX_ATTEMPTS = 10
+MAX_ATTEMPTS = 15
 CHUNK_SIZE = 1024*1024
 POSTFIX_MODEL_PATH = ".gguf"
 MAX_FILE_SIZE = 600 * 1024 * 1024  # 600MB in bytes
 FLUSH_FREQUENCY = 0.1  # Flush to disk ~10% of chunks
-CHUNK_TIMEOUT = 300  # 300 seconds without data is a timeout
+CHUNK_TIMEOUT = 600  # 10 minutes without data is a timeout
 
 # Create logger with NullHandler by default
 # This prevents duplicate logging and follows best practices
@@ -182,8 +182,8 @@ async def download_single_file_async(session: aiohttp.ClientSession, file_info: 
             if resume_position > 0:
                 headers['Range'] = f'bytes={resume_position}-'
             
-            # Use a longer timeout for large files
-            timeout = aiohttp.ClientTimeout(total=300, connect=60, sock_read=120, sock_connect=60)
+            # Use much longer timeout values for large files - disable total timeout
+            timeout = aiohttp.ClientTimeout(total=None, connect=180, sock_read=600, sock_connect=180)
             
             async with session.get(url, headers=headers, timeout=timeout) as response:
                 if response.status in (200, 206):
@@ -339,8 +339,8 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     # Initialize the download tracker
     download_tracker.initialize(total_bytes, filecoin_hash, num_of_files)
     
-    # Use semaphore to limit concurrent downloads
-    minimum_workers = min(os.cpu_count() * 2, 8)
+    # Use a much more conservative number of concurrent downloads to avoid timeouts
+    minimum_workers = min(os.cpu_count(), 1)  # Only 1 worker by default
     max_concurrent_downloads = min(minimum_workers, num_of_files)
     logger.info(f"Max concurrent downloads set to {max_concurrent_downloads}")
     semaphore = asyncio.Semaphore(max_concurrent_downloads)
@@ -351,7 +351,7 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
             return await download_single_file_async(session, file_info, folder_path)
     
     connector = aiohttp.TCPConnector(limit=max_concurrent_downloads, ssl=False)
-    timeout = aiohttp.ClientTimeout(total=None, connect=60, sock_connect=60, sock_read=120)
+    timeout = aiohttp.ClientTimeout(total=None, connect=180, sock_connect=180, sock_read=600)
     
     logger.info(f"Downloading {total_files} files with max {max_concurrent_downloads} concurrent downloads")
     logger.info(f"Maximum file size limit: {MAX_FILE_SIZE / (1024 * 1024):.0f}MB per file")
