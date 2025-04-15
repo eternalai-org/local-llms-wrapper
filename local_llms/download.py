@@ -99,12 +99,13 @@ class DownloadProgressTracker:
             print("should_print_progress: False")
             return
             
-        progress_percent, downloaded_gb, total_gb, speed_mbps = self.get_progress()
+        progress_percent, _, total_gb, _ = self.get_progress()
         if total_gb == 0:
             logger.error("Total size is not known")
         else:            
-            estimate_num_of_dowloaded_files = int((progress_percent / 100) * self.num_of_files)
-            print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {estimate_num_of_dowloaded_files}/{self.num_of_files} --hash {self.filecoin_hash} --percent {progress_percent}%")
+            if int(progress_percent) % 5 == 0:
+                estimate_num_of_dowloaded_files = int((progress_percent / 100) * self.num_of_files)
+                print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {estimate_num_of_dowloaded_files}/{self.num_of_files} --hash {self.filecoin_hash} --percent {progress_percent}%")
         
 # Create a global instance
 download_tracker = DownloadProgressTracker()
@@ -346,7 +347,7 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     download_tracker.initialize(total_bytes, filecoin_hash, num_of_files)
     
     # Use semaphore to limit concurrent downloads
-    max_concurrent_downloads = min(os.cpu_count() * 2, 8)
+    max_concurrent_downloads = min(os.cpu_count() * 4, 8)
     logger.info(f"Max concurrent downloads set to {max_concurrent_downloads}")
     semaphore = asyncio.Semaphore(max_concurrent_downloads)
     
@@ -387,16 +388,14 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
                 path, error = await future
                 if path:
                     successful_downloads.append(path)
-                    print(f"\n[LAUNCHER_LOGGER] [MODEL_INSTALL] --step {len(successful_downloads)}/{num_of_files} --hash {filecoin_hash}")
-                    print(f"Progress: {len(successful_downloads)}/{total_files} files downloaded")
                 else:
                     failed_downloads.append(error)
                     # Check if this was a size limit failure
                     if error and "exceeds maximum allowed size" in error:
                         size_limit_failures.append(error)
-                    print(f"\nDownload failed: {error}")
+                    logger.error(f"\nDownload failed: {error}")
             except Exception as e:
-                print(f"\nUnexpected error in download task: {e}")
+                logger.error(f"\nUnexpected error in download task: {e}")
                 failed_downloads.append(str(e))
         
         # Cancel the progress printing task
@@ -408,27 +407,27 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
         
         # Print final progress
         download_tracker.print_progress()
-        print()  # New line after progress
+        logger.info("")  # New line after progress
         
         # Check if all downloads were successful
         if len(successful_downloads) == num_of_files:
-            print(f"All {num_of_files} files downloaded successfully.")
+            logger.info(f"All {num_of_files} files downloaded successfully.")
             return successful_downloads
         else:
-            print(f"Downloaded {len(successful_downloads)} out of {num_of_files} files.")
+            logger.info(f"Downloaded {len(successful_downloads)} out of {num_of_files} files.")
             if size_limit_failures:
-                print(f"Size limit failures ({len(size_limit_failures)}):")
+                logger.info(f"Size limit failures ({len(size_limit_failures)}):")
                 for i, error in enumerate(size_limit_failures[:5], 1):
-                    print(f"  {i}. {error}")
+                    logger.info(f"  {i}. {error}")
                 if len(size_limit_failures) > 5:
-                    print(f"  ... and {len(size_limit_failures) - 5} more size limit failures")
+                    logger.info(f"  ... and {len(size_limit_failures) - 5} more size limit failures")
             
             if failed_downloads:
-                print(f"Failed downloads ({len(failed_downloads)}):")
+                logger.error(f"Failed downloads ({len(failed_downloads)}):")
                 for i, error in enumerate(failed_downloads[:5], 1):
-                    print(f"  {i}. {error}")
+                    logger.error(f"  {i}. {error}")
                 if len(failed_downloads) > 5:
-                    print(f"  ... and {len(failed_downloads) - 5} more errors")
+                    logger.error(f"  ... and {len(failed_downloads) - 5} more errors")
             return successful_downloads if successful_downloads else []
 
 async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Path = DEFAULT_OUTPUT_DIR) -> str | None:
