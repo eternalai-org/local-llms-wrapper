@@ -368,6 +368,7 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     # Start a task to periodically print the total progress
     async def print_total_progress():
         while True:
+            print(111)
             download_tracker.print_progress()
             await asyncio.sleep(1)
     
