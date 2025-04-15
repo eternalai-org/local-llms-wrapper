@@ -43,7 +43,7 @@ class DownloadProgressTracker:
         self.download_speed = 0  # bytes per second
         self._last_progress_print = 0
         self._progress_print_interval = 1.0  # Print progress every second
-        self.prev_index = 0
+        self.prev_index = -1
     
     def initialize(self, total_bytes, filecoin_hash, num_of_files):
         with self.lock:
