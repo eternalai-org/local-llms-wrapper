@@ -17,7 +17,7 @@ GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
 MAX_ATTEMPTS = 10
-CHUNK_SIZE = 1024
+CHUNK_SIZE = 1024*1024
 POSTFIX_MODEL_PATH = ".gguf"
 MAX_FILE_SIZE = 600 * 1024 * 1024  # 600MB in bytes
 FLUSH_FREQUENCY = 0.1  # Flush to disk ~10% of chunks
@@ -340,7 +340,7 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     download_tracker.initialize(total_bytes, filecoin_hash, num_of_files)
     
     # Use semaphore to limit concurrent downloads
-    minimum_workers = min(os.cpu_count() * 2, 8)
+    minimum_workers = min(os.cpu_count() * 2, 2)
     max_concurrent_downloads = min(minimum_workers, num_of_files)
     logger.info(f"Max concurrent downloads set to {max_concurrent_downloads}")
     semaphore = asyncio.Semaphore(max_concurrent_downloads)
