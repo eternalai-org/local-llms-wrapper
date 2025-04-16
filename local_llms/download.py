@@ -13,7 +13,6 @@ GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
 MAX_ATTEMPTS = 10
-CHUNK_SIZE = 1024 * 1024
 POSTFIX_MODEL_PATH = ".gguf"
 
 def check_downloaded_model(filecoin_hash: str, output_dir: Path = DEFAULT_OUTPUT_DIR) -> bool:
