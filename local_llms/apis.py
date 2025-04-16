@@ -576,9 +576,23 @@ class RequestProcessor:
         This ensures requests are processed in order, one at a time.
         Returns a Future that will be resolved with the result.
         """
+        request_id = str(uuid.uuid4())[:8]  # Generate a short request ID for tracking
+        queue_size = RequestProcessor.queue.qsize()
+        
+        logger.info(f"[{request_id}] Adding request to queue for endpoint {endpoint} (queue size: {queue_size})")
+        
+        start_wait_time = time.time()
         future = asyncio.Future()
-        await RequestProcessor.queue.put((endpoint, request_data, future))
-        return await future
+        await RequestProcessor.queue.put((endpoint, request_data, future, request_id, start_wait_time))
+        
+        # Wait for the future to be resolved
+        logger.info(f"[{request_id}] Waiting for result from endpoint {endpoint}")
+        result = await future
+        
+        total_time = time.time() - start_wait_time
+        logger.info(f"[{request_id}] Request completed for endpoint {endpoint} (total time: {total_time:.2f}s)")
+        
+        return result
     
     @staticmethod
     async def process_direct(endpoint: str, request_data: dict):
@@ -586,11 +600,21 @@ class RequestProcessor:
         Process a request directly without queueing.
         Use this for administrative endpoints that don't require model access.
         """
+        request_id = str(uuid.uuid4())[:8]  # Generate a short request ID for tracking
+        logger.info(f"[{request_id}] Processing direct request for endpoint {endpoint}")
+        
+        start_time = time.time()
         if endpoint in RequestProcessor.MODEL_ENDPOINTS:
             model_cls, handler = RequestProcessor.MODEL_ENDPOINTS[endpoint]
             request_obj = model_cls(**request_data)
-            return await handler(request_obj)
+            result = await handler(request_obj)
+            
+            process_time = time.time() - start_time
+            logger.info(f"[{request_id}] Direct request completed for endpoint {endpoint} (time: {process_time:.2f}s)")
+            
+            return result
         else:
+            logger.error(f"[{request_id}] Endpoint not found: {endpoint}")
             raise HTTPException(status_code=404, detail="Endpoint not found")
     
     # Global worker function
@@ -602,26 +626,44 @@ class RequestProcessor:
         """
         while True:
             try:
-                endpoint, request_data, future = await RequestProcessor.queue.get()
+                endpoint, request_data, future, request_id, start_wait_time = await RequestProcessor.queue.get()
+                
+                wait_time = time.time() - start_wait_time
+                queue_size = RequestProcessor.queue.qsize()
+                processed_count += 1
+                
+                logger.info(f"[{request_id}] Processing request from queue for endpoint {endpoint} "
+                           f"(wait time: {wait_time:.2f}s, queue size: {queue_size}, processed: {processed_count})")
                 
                 # Use the lock to ensure only one request is processed at a time
                 async with RequestProcessor.processing_lock:
+                    processing_start = time.time()
+                    
                     if endpoint in RequestProcessor.MODEL_ENDPOINTS:
                         model_cls, handler = RequestProcessor.MODEL_ENDPOINTS[endpoint]
                         try:
-                            logger.info(f"Processing request for endpoint: {endpoint}")
                             request_obj = model_cls(**request_data)
                             result = await handler(request_obj)
                             future.set_result(result)
-                            logger.info(f"Completed request for endpoint: {endpoint}")
+                            
+                            processing_time = time.time() - processing_start
+                            total_time = time.time() - start_wait_time
+                            
+                            logger.info(f"[{request_id}] Completed request for endpoint {endpoint} "
+                                       f"(processing: {processing_time:.2f}s, total: {total_time:.2f}s)")
                         except Exception as e:
-                            logger.error(f"Handler error for {endpoint}: {str(e)}")
+                            logger.error(f"[{request_id}] Handler error for {endpoint}: {str(e)}")
                             future.set_exception(e)
                     else:
-                        logger.error(f"Endpoint not found: {endpoint}")
+                        logger.error(f"[{request_id}] Endpoint not found: {endpoint}")
                         future.set_exception(HTTPException(status_code=404, detail="Endpoint not found"))
                 
                 RequestProcessor.queue.task_done()
+                
+                # Log periodic status about queue health
+                if processed_count % 10 == 0:
+                    logger.info(f"Queue status: current size={queue_size}, processed={processed_count}")
+                
             except asyncio.CancelledError:
                 logger.info("Worker task cancelled, exiting")
                 break  # Exit the loop when the task is canceled

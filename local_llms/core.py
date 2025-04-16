@@ -204,6 +204,7 @@ class LocalLLMManager:
                     "-ngl", "-1",
                     "--no-mmap",
                     "--mlock",
+                    "--slots",
                     "--chat-template-file", template_path
                 ]
             else:
@@ -219,6 +220,7 @@ class LocalLLMManager:
                     "-ngl", "-1",
                     "--no-mmap",
                     "--mlock",
+                    "--slots",
                     "--no-webui"
                 ]
             # Add memory optimization parameters if defined
