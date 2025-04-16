@@ -13,6 +13,7 @@ import tempfile
 import random
 import time
 import json
+import uuid
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from typing import Dict, Optional, Union, Any, Callable, Tuple
@@ -23,10 +24,8 @@ from local_llms.schema import (
     Config, 
     ChatCompletionRequest, 
     ChatCompletionResponse,
-    ChatCompletionResponseChoice,
     EmbeddingRequest,
-    EmbeddingResponse,
-    EmbeddingResponseData
+    EmbeddingResponse
 )
 
 # Set up logging
@@ -472,9 +471,6 @@ class ServiceHandler:
             formatted_response: The complete response to stream in chunks
             model: The model name
         """
-        import uuid
-        import json
-        import time
         
         # Base structure for each chunk
         base_chunk = {

@@ -13,7 +13,7 @@ GATEWAY_URL = "https://gateway.lighthouse.storage/ipfs/"
 DEFAULT_OUTPUT_DIR = Path.cwd() / "llms-storage"
 SLEEP_TIME = 60
 MAX_ATTEMPTS = 10
-CHUNK_SIZE = 4096
+CHUNK_SIZE = 1024 * 1024
 POSTFIX_MODEL_PATH = ".gguf"
 
 def check_downloaded_model(filecoin_hash: str, output_dir: Path = DEFAULT_OUTPUT_DIR) -> bool:
@@ -213,7 +213,8 @@ async def download_files_from_lighthouse_async(data: dict) -> list:
     total_files = len(files)
     
     # Use semaphore to limit concurrent downloads
-    max_concurrent_downloads = min(os.cpu_count() * 2, 8)
+    minimum_workers = min(4, num_of_files)
+    max_concurrent_downloads = min(os.cpu_count() * 2, minimum_workers)
     semaphore = asyncio.Semaphore(max_concurrent_downloads)
     
     # Wrapper for download with semaphore
@@ -353,9 +354,6 @@ async def download_model_from_filecoin_async(filecoin_hash: str, output_dir: Pat
                         continue
                     else:
                         raise Exception("Failed to download model files after all attempts")
-                
-                # Track extracted files for cleanup
-                extracted_files = paths
                 
                 # Extract files
                 try:

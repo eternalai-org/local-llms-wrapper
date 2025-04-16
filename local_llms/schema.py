@@ -36,6 +36,7 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: Optional[float] = None  # Frequency penalty
     presence_penalty: Optional[float] = None   # Presence penalty
     stop: Optional[Union[str, List[str]]] = None  # Stop sequences
+    seed: Optional[int] = 0   # Seed for reproducibility
 
     @validator("messages")
     def check_messages_not_empty(cls, v):
