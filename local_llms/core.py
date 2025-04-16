@@ -551,9 +551,6 @@ class LocalLLMManager:
                     logger.warning("API process did not terminate, forcing kill.")
                     app_process.kill()
 
-            # Force garbage collection to free memory
-            gc.collect()
-
             # Remove the tracking file
             os.remove(self.pickle_file)
             logger.info("LLM service stopped successfully.")
