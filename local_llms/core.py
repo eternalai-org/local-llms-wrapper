@@ -530,12 +530,6 @@ class LocalLLMManager:
             app_port = service_info.get("app_port")
 
             logger.info(f"Stopping LLM service '{hash}' running on port {app_port} (PID: {app_pid})...")
-
-            # Trigger unload first to properly release memory
-            try:
-                self.unload_model()
-            except:
-                pass
                 
             # Terminate process by PID
             if psutil.pid_exists(pid):
