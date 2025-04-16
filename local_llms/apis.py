@@ -624,6 +624,9 @@ class RequestProcessor:
         Worker function to process requests from the queue sequentially.
         Only one request is processed at a time.
         """
+        logger.info("Request processor worker started")
+        processed_count = 0
+        
         while True:
             try:
                 endpoint, request_data, future, request_id, start_wait_time = await RequestProcessor.queue.get()
