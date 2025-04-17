@@ -140,7 +140,8 @@ class ServiceHandler:
                 
             running_llm_command = app.state.service_info["running_llm_command"]
             logger.info(f"Reloading llama-server with command: {running_llm_command}")
-            
+
+            logs_dir = Path("logs")
             # Ensure logs directory exists
             logs_dir.mkdir(exist_ok=True)
             
@@ -824,8 +825,8 @@ async def unload_checker():
     while True:
         try:
             # Wait for the check interval
-            await asyncio.sleep(UNLOAD_CHECK_INTERVAL)
-            
+            await asyncio.sleep(UNLOAD_CHECK_INTERVAL)   
+            logger.info("Unload checker task checking if llama-server is idle")
             # Check if the service is running and has been idle for too long
             if (hasattr(app.state, "service_info") and 
                 "pid" in app.state.service_info and 
