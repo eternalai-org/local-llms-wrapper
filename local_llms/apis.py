@@ -826,7 +826,6 @@ async def unload_checker():
         try:
             # Wait for the check interval
             await asyncio.sleep(UNLOAD_CHECK_INTERVAL)   
-            logger.info("Unload checker task checking if llama-server is idle")
             # Check if the service is running and has been idle for too long
             if (hasattr(app.state, "service_info") and 
                 "pid" in app.state.service_info and 
