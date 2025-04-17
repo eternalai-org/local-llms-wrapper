@@ -182,7 +182,7 @@ class LocalLLMManager:
             service_metadata["running_llm_command"] = running_llm_command
             # Create log files for stdout and stderr for LLM process
             os.makedirs("logs", exist_ok=True)
-            if not os.path.exists("logs/llm.log"):
+            if os.path.exists("logs/llm.log"):
                 # remove old log file
                 os.remove("logs/llm.log")
             llm_log_stderr = Path(f"logs/llm.log")
@@ -217,7 +217,7 @@ class LocalLLMManager:
             # Create log files for stdout and stderr
             os.makedirs("logs", exist_ok=True)
             log_path_stderr = Path(f"logs/api.log")
-            if not os.path.exists("logs/api.log"):
+            if os.path.exists("logs/api.log"):
                 # remove old log file
                 os.remove("logs/api.log")
             try:
