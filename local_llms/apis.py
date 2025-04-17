@@ -39,7 +39,7 @@ logger.setLevel(logging.INFO)
 app = FastAPI()
 
 # Constants for dynamic unload feature
-IDLE_TIMEOUT = 180  # 3 minutes in seconds
+IDLE_TIMEOUT = 600  # 10 minutes in seconds
 UNLOAD_CHECK_INTERVAL = 60  # Check every 60 seconds
 SERVICE_START_TIMEOUT = 60  # Maximum time to wait for service to start
 
