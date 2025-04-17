@@ -15,6 +15,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Tool for managing local large language models"
     )
+    parser.add_argument(
+        "--version", action="version", version=f"Local LLMS (Large Language Model Service) version: {__version__}"
+    )
     subparsers = parser.add_subparsers(
         dest='command', help="Commands for managing local language models"  
     )
@@ -39,16 +42,6 @@ def parse_args():
     )
     stop_command = subparsers.add_parser(
         "stop", help="Stop a local language model server"
-    )
-    version_command = subparsers.add_parser(
-        "version", help="Print the version of local_llms"
-    )
-    memory_command = subparsers.add_parser(
-        "memory", help="Get memory usage information for the running model"
-    )
-    memory_command.add_argument(
-        "--json", action="store_true", 
-        help="Output memory information in JSON format"
     )
     download_command = subparsers.add_parser(
        "download", help="Download and extract model files from IPFS"
@@ -166,77 +159,6 @@ def handle_check_downloading(args):
     print(str_files)
     return True
 
-def handle_memory(args):
-    import json
-    memory_info = manager.get_memory_usage()
-    if not memory_info:
-        logger.error("No running model or unable to get memory information")
-        return False
-    
-    if "error" in memory_info:
-        logger.error(f"Error getting memory information: {memory_info['error']}")
-        return False
-    
-    if args.json:
-        print(json.dumps(memory_info, indent=2))
-    else:
-        model_hash = memory_info.get("model_hash", "Unknown")
-        rss_mb = memory_info.get("rss_mb", 0)
-        vms_mb = memory_info.get("vms_mb", 0)
-        percent = memory_info.get("percent", 0)
-        
-        # Get system memory information
-        sys_info = memory_info.get("system", {})
-        total_gb = sys_info.get("total_gb", 0)
-        available_gb = sys_info.get("available_gb", 0)
-        used_gb = sys_info.get("used_gb", 0)
-        
-        # Get model information
-        model_info = memory_info.get("model_info", {})
-        context_length = model_info.get("context_length", 0)
-        family = model_info.get("family", "unknown")
-        
-        # Print summary
-        print(f"📊 Memory Usage Report for Model: {model_hash}")
-        print(f"  Model Family: {family}")
-        print(f"  Context Length: {context_length}")
-        print(f"\n📈 Process Memory:")
-        print(f"  Total RSS: {rss_mb:.2f} MB")
-        print(f"  Total VMS: {vms_mb:.2f} MB")
-        
-        # Process details
-        print(f"\n🔍 Process Details:")
-        for proc_name, proc_info in memory_info.get("processes", {}).items():
-            if "error" in proc_info:
-                print(f"  {proc_name}: Error - {proc_info['error']}")
-                continue
-                
-            rss = proc_info.get("rss_mb", 0)
-            vms = proc_info.get("vms_mb", 0)
-            cpu = proc_info.get("cpu_percent", 0)
-            running_time = proc_info.get("running_time_minutes", 0)
-            
-            print(f"  {proc_name}:")
-            print(f"    RSS: {rss:.2f} MB")
-            print(f"    VMS: {vms:.2f} MB")
-            print(f"    CPU: {cpu:.1f}%")
-            print(f"    Running Time: {running_time:.1f} minutes")
-            
-            # Children processes if any
-            if "children" in proc_info and proc_info["children"]:
-                children = proc_info["children"]
-                print(f"    Child Processes: {len(children)}")
-                child_rss = sum(c.get("rss_mb", 0) for c in children)
-                print(f"    Children RSS: {child_rss:.2f} MB")
-        
-        # System memory
-        print(f"\n💻 System Memory:")
-        print(f"  Total: {total_gb:.2f} GB")
-        print(f"  Used: {used_gb:.2f} GB ({percent:.1f}%)")
-        print(f"  Available: {available_gb:.2f} GB")
-    
-    return True
-
 def main():
     known_args, unknown_args = parse_args()
     for arg in unknown_args:
@@ -261,8 +183,6 @@ def main():
         handle_restart(known_args)
     elif known_args.command == "downloading":
         handle_check_downloading(known_args)
-    elif known_args.command == "memory":
-        handle_memory(known_args)
     else:
         logger.error(f"Unknown command: {known_args.command}")
         sys.exit(2)

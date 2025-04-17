@@ -20,21 +20,6 @@ The **Local LLMs Toolkit** empowers developers to deploy state-of-the-art large 
 - **Simple Deployment**: Get models running with minimal configuration
 - **Filecoin Integration**: Upload and download models directly from decentralized storage (Filecoin)
 
-## 🆕 Latest Updates
-
-Version 2.0.8 includes:
-- Improved model restart reliability
-- Enhanced idle model detection and management
-- Better support for Gemma models
-- OpenAI-compatible API endpoints
-- Fixed memory usage monitoring
-- Performance optimizations
-- New `memory` command to check model resource usage
-- Optimized download process with better concurrency and error handling
-- Improved memory diagnostics with detailed system and process information
-- Exponential backoff for more reliable downloads
-- Better temp file handling to prevent corruption during downloads
-
 ## 📦 Installation
 
 ### MacOS
@@ -49,7 +34,7 @@ Confirm successful installation:
 
 ```bash
 source local_llms/bin/activate
-local-llms version
+local-llms --version
 ```
 
 ## 🚀 Usage
@@ -78,27 +63,19 @@ local-llms status
 # Stop the current model
 local-llms stop
 
-# Check memory usage of running model
-local-llms memory
-
-# Get detailed memory usage in JSON format
-local-llms memory --json
 ```
 ### Important Notes on Uploading Models
 
 When using the `upload` command, the following flags are required:
 
 - **`--folder-name`**: Specifies the directory containing your model. The model file must have the same name as this folder.
-- **`--task`**: Defines the model's primary purpose (e.g., `text-generation`, `text-classification`, `image-recognition`, etc.)
 
 **Example Upload Command:**
 
 ```bash
-# Upload a GPT model for text generation
-local-llms upload --folder-name llama2-7b --task text-generation
 
 # Upload a BERT model for text classification
-local-llms upload --folder-name bert-classifier --task text-classification
+local-llms upload --folder-name bert-classifier
 ```
 
 Make sure your folder structure follows this convention:

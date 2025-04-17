@@ -14,6 +14,8 @@ import random
 import time
 import json
 import uuid
+import subprocess
+import signal
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from typing import Dict, Optional, Union, Any, Callable, Tuple
@@ -34,6 +36,10 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Constants for dynamic unload feature
+IDLE_TIMEOUT = 10  # 5 minutes in seconds
+UNLOAD_CHECK_INTERVAL = 5  # Check every minute
 
 # Cache for service port to avoid repeated lookups
 @lru_cache(maxsize=1)
@@ -65,6 +71,86 @@ class ServiceHandler:
                 logger.error("Service information not set")
                 raise HTTPException(status_code=503, detail="Service information not set")
             return app.state.service_info["port"]
+    
+    @staticmethod
+    async def kill_llama_server():
+        """
+        Kill the llama-server process if it's running.
+        """
+        try:
+            # Get the PID from the service info
+            if not hasattr(app.state, "service_info") or "pid" not in app.state.service_info:
+                logger.warning("No PID found in service info, cannot kill llama-server")
+                return False
+                
+            pid = app.state.service_info["pid"]
+            logger.info(f"Attempting to kill llama-server with PID {pid}")
+            
+            # Try to kill the process
+            os.kill(pid, signal.SIGTERM)
+            logger.info(f"Successfully sent SIGTERM to llama-server (PID: {pid})")
+            
+            # Wait a moment and check if the process is still running
+            await asyncio.sleep(2)
+            try:
+                os.kill(pid, 0)  # Check if process exists
+                # If we get here, the process is still running, try SIGKILL
+                logger.warning(f"Process {pid} still running after SIGTERM, sending SIGKILL")
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                # Process is already gone, which is good
+                pass
+                
+            # Remove the PID from service info
+            if hasattr(app.state, "service_info"):
+                app.state.service_info.pop("pid", None)
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error killing llama-server: {str(e)}")
+            return False
+    
+    @staticmethod
+    async def reload_llama_server():
+        """
+        Reload the llama-server process.
+        """
+        try:
+            # Get the command to start llama-server from the service info
+            if not hasattr(app.state, "service_info") or "running_llm_command" not in app.state.service_info:
+                logger.error("No running_llm_command found in service info, cannot reload llama-server")
+                return False
+                
+            command = app.state.service_info["running_llm_command"]
+            logger.info(f"Reloading llama-server with command: {command}")
+            
+            # Start the process in the background
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setpgrp  # Run in a new process group
+            )
+            
+            # Wait a moment for the process to start
+            await asyncio.sleep(2)
+            
+            # Check if the process is running
+            if process.poll() is None:
+                # Process is running, update the PID in service info
+                if hasattr(app.state, "service_info"):
+                    app.state.service_info["pid"] = process.pid
+                logger.info(f"Successfully reloaded llama-server with PID {process.pid}")
+                return True
+            else:
+                # Process failed to start
+                stdout, stderr = process.communicate()
+                logger.error(f"Failed to reload llama-server: {stderr.decode()}")
+                return False
+        except Exception as e:
+            logger.error(f"Error reloading llama-server: {str(e)}")
+            return False
     
     @staticmethod
     def _detect_and_fix_tool_calls_in_content(response_data: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
@@ -581,6 +667,14 @@ class RequestProcessor:
         
         logger.info(f"[{request_id}] Adding request to queue for endpoint {endpoint} (queue size: {queue_size})")
         
+        # Update the last request time
+        app.state.last_request_time = time.time()
+        
+        # Check if we need to reload the llama-server
+        if hasattr(app.state, "service_info") and "pid" not in app.state.service_info:
+            logger.info(f"[{request_id}] Llama-server not running, reloading...")
+            await ServiceHandler.reload_llama_server()
+        
         start_wait_time = time.time()
         future = asyncio.Future()
         await RequestProcessor.queue.put((endpoint, request_data, future, request_id, start_wait_time))
@@ -602,6 +696,14 @@ class RequestProcessor:
         """
         request_id = str(uuid.uuid4())[:8]  # Generate a short request ID for tracking
         logger.info(f"[{request_id}] Processing direct request for endpoint {endpoint}")
+        
+        # Update the last request time
+        app.state.last_request_time = time.time()
+        
+        # Check if we need to reload the llama-server
+        if hasattr(app.state, "service_info") and "pid" not in app.state.service_info:
+            logger.info(f"[{request_id}] Llama-server not running, reloading...")
+            await ServiceHandler.reload_llama_server()
         
         start_time = time.time()
         if endpoint in RequestProcessor.MODEL_ENDPOINTS:
@@ -674,6 +776,36 @@ class RequestProcessor:
                 logger.error(f"Worker error: {str(e)}")
                 # Continue working, don't crash the worker
 
+# Unload checker task
+async def unload_checker():
+    """
+    Periodically check if the llama-server has been idle for too long and unload it if needed.
+    """
+    logger.info("Unload checker task started")
+    
+    while True:
+        try:
+            # Wait for the check interval
+            await asyncio.sleep(UNLOAD_CHECK_INTERVAL)
+            
+            # Check if the service is running and has been idle for too long
+            if (hasattr(app.state, "service_info") and 
+                "pid" in app.state.service_info and 
+                hasattr(app.state, "last_request_time")):
+                
+                idle_time = time.time() - app.state.last_request_time
+                
+                if idle_time > IDLE_TIMEOUT:
+                    logger.info(f"Llama-server has been idle for {idle_time:.2f}s, unloading...")
+                    await ServiceHandler.kill_llama_server()
+            
+        except asyncio.CancelledError:
+            logger.info("Unload checker task cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Error in unload checker task: {str(e)}")
+            # Continue running despite errors
+
 # Performance monitoring middleware
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
@@ -704,8 +836,15 @@ async def startup_event():
     )
     app.state.client = httpx.AsyncClient(limits=limits, timeout=Config.HTTP_TIMEOUT)
     
+    # Initialize the last request time
+    app.state.last_request_time = time.time()
+    
     # Start the worker
     app.state.worker_task = asyncio.create_task(RequestProcessor.worker())
+    
+    # Start the unload checker task
+    app.state.unload_checker_task = asyncio.create_task(unload_checker())
+    
     logger.info("Service started successfully")
 
 @app.on_event("shutdown")
@@ -727,6 +866,18 @@ async def shutdown_event():
         except asyncio.CancelledError:
             pass  # Handle cancellation gracefully
     
+    # Cancel the unload checker task
+    if hasattr(app.state, "unload_checker_task"):
+        app.state.unload_checker_task.cancel()
+        try:
+            await app.state.unload_checker_task  # Wait for the task to finish
+        except asyncio.CancelledError:
+            pass  # Handle cancellation gracefully
+    
+    # Kill the llama-server if it's running
+    if hasattr(app.state, "service_info") and "pid" in app.state.service_info:
+        await ServiceHandler.kill_llama_server()
+    
     logger.info("Service shutdown complete")
 
 # API Endpoints
@@ -745,66 +896,11 @@ async def health():
     if not hasattr(app.state, "service_info"):
         return {"status": "starting", "message": "Service info not set yet"}
     
+    # Update the last request time
+    app.state.last_request_time = time.time()
+    
     return {"status": "ok", "service": app.state.service_info.get("family", "unknown")}
 
-@app.post("/unload")
-async def unload_model():
-    """
-    Endpoint to unload the model from memory but keep the server running.
-    This helps reduce memory usage when the model is not actively being used.
-    This endpoint bypasses the request queue for immediate response.
-    """
-    try:
-        logger.info("Received request to unload model from memory")
-        
-        # Check if the service info is set
-        if not hasattr(app.state, "service_info"):
-            raise HTTPException(status_code=503, detail="Service info not set yet")
-            
-        # Perform model unloading operations
-        # This is a placeholder - actual implementation depends on the underlying model server
-        # For example, you might send a signal to the model server to release memory
-        
-        # For now, just log and return success
-        logger.info("Model has been unloaded from memory")
-        return {"status": "ok", "message": "Model unloaded successfully"}
-    except Exception as e:
-        logger.error(f"Error unloading model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to unload model: {str(e)}")
-
-@app.post("/reload")
-async def reload_model(model_path: dict):
-    """
-    Endpoint to reload a previously unloaded model.
-    This endpoint bypasses the request queue for immediate response.
-    
-    Args:
-        model_path (dict): Dictionary containing the model_path key with path to the model file
-    """
-    try:
-        logger.info(f"Received request to reload model from {model_path.get('model_path')}")
-        
-        # Check if the service info is set
-        if not hasattr(app.state, "service_info"):
-            raise HTTPException(status_code=503, detail="Service info not set yet")
-            
-        # Validate the model path
-        path = model_path.get("model_path")
-        if not path or not os.path.exists(path):
-            raise HTTPException(status_code=400, detail="Invalid or missing model path")
-            
-        # Perform model reloading operations
-        # This is a placeholder - actual implementation depends on the underlying model server
-        # For example, you might send a signal to the model server to reload the model
-        
-        # For now, just log and return success
-        logger.info(f"Model has been reloaded from {path}")
-        return {"status": "ok", "message": "Model reloaded successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error reloading model: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to reload model: {str(e)}")
 
 @app.post("/update")
 async def update(request: dict):
