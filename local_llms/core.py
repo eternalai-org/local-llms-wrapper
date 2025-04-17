@@ -99,9 +99,6 @@ class LocalLLMManager:
         try:
             logger.info(f"Starting local LLM service for model with hash: {hash}")
             
-            # Reset activity timer when starting a new model
-            self.track_activity()
-            
             local_model_path = asyncio.run(download_model_from_filecoin_async(hash))
             model_running = self.get_running_model()
             if model_running:
