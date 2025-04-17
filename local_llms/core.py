@@ -201,7 +201,6 @@ class LocalLLMManager:
                 llm_process.terminate()
                 return False
 
-
             # start the FastAPI app in the background           
             uvicorn_command = [
                 "uvicorn",
@@ -211,21 +210,12 @@ class LocalLLMManager:
                 "--log-level", "info"
             ]
 
-
             logger.info(f"Starting process: {' '.join(uvicorn_command)}")
-
-            # Create log files for stdout and stderr
-            os.makedirs("logs", exist_ok=True)
-            log_path_stderr = Path(f"logs/api_stderr_{port}.log")
-            
             try:
-                with open(log_path_stderr, 'w') as stderr_log:
-                    apis_process = subprocess.Popen(
-                        uvicorn_command,
-                        stderr=stderr_log,
-                        preexec_fn=os.setsid
-                    )
-                logger.info(f"API logs written to {log_path_stderr}")
+                apis_process = subprocess.Popen(
+                    uvicorn_command,
+                    preexec_fn=os.setsid
+                )
             except Exception as e:
                 logger.error(f"Error starting FastAPI app: {str(e)}", exc_info=True)
                 llm_process.terminate()
