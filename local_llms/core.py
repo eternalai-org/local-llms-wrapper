@@ -148,7 +148,6 @@ class LocalLLMManager:
                 
                 running_llm_command = [
                     llama_server_path,
-                    "--jinja",
                     "--model", str(local_model_path),
                     "--port", str(llm_running_port),
                     "--host", host,
@@ -159,13 +158,12 @@ class LocalLLMManager:
                     "-ngl", "-1",
                     "--no-mmap",
                     "--mlock",
-                    "--slots",
+                    "--jinja",
                     "--chat-template-file", template_path
                 ]
             else:
                 running_llm_command = [
                     llama_server_path,
-                    "--jinja",
                     "--model", str(local_model_path),
                     "--port", str(llm_running_port),
                     "--host", host,
@@ -175,16 +173,13 @@ class LocalLLMManager:
                     "-ngl", "-1",
                     "--no-mmap",
                     "--mlock",
-                    "--slots",
+                    "--jinja",
                     "--no-webui"
                 ]
             logger.info(f"Starting process: {' '.join(running_llm_command)}")
             service_metadata["running_llm_command"] = running_llm_command
             # Create log files for stdout and stderr for LLM process
             os.makedirs("logs", exist_ok=True)
-            if os.path.exists("logs/llm.log"):
-                # remove old log file
-                os.remove("logs/llm.log")
             llm_log_stderr = Path(f"logs/llm.log")
             llm_process = None
             try:
@@ -217,9 +212,6 @@ class LocalLLMManager:
             # Create log files for stdout and stderr
             os.makedirs("logs", exist_ok=True)
             log_path_stderr = Path(f"logs/api.log")
-            if os.path.exists("logs/api.log"):
-                # remove old log file
-                os.remove("logs/api.log")
             try:
                 with open(log_path_stderr, 'w') as stderr_log:
                     apis_process = subprocess.Popen(

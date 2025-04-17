@@ -16,9 +16,11 @@ import json
 import uuid
 import subprocess
 import signal
+import requests
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from typing import Dict, Optional, Union, Any, Callable, Tuple
+from typing import Dict, Optional, Union, Any, Callable, Tuple, List
 from functools import lru_cache
 
 # Import schemas from schema.py
@@ -30,16 +32,16 @@ from local_llms.schema import (
     EmbeddingResponse
 )
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Set up logging with both console and file output
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 app = FastAPI()
 
 # Constants for dynamic unload feature
-IDLE_TIMEOUT = 600  # 10 minutes in seconds
+IDLE_TIMEOUT = 180  # 3 minutes in seconds
 UNLOAD_CHECK_INTERVAL = 60  # Check every 60 seconds
+SERVICE_START_TIMEOUT = 60  # Maximum time to wait for service to start
 
 # Cache for service port to avoid repeated lookups
 @lru_cache(maxsize=1)
@@ -86,9 +88,18 @@ class ServiceHandler:
             pid = app.state.service_info["pid"]
             logger.info(f"Attempting to kill llama-server with PID {pid}")
             
-            # Try to kill the process
-            os.kill(pid, signal.SIGTERM)
-            logger.info(f"Successfully sent SIGTERM to llama-server (PID: {pid})")
+            # Try to kill the process group (more reliable than just the process)
+            try:
+                # First try to get the process group ID
+                pgid = os.getpgid(pid)
+                # Kill the entire process group
+                os.killpg(pgid, signal.SIGTERM)
+                logger.info(f"Successfully sent SIGTERM to process group {pgid}")
+            except (ProcessLookupError, OSError) as e:
+                logger.warning(f"Could not kill process group: {e}")
+                # Fall back to killing just the process
+                os.kill(pid, signal.SIGTERM)
+                logger.info(f"Successfully sent SIGTERM to process {pid}")
             
             # Wait a moment and check if the process is still running
             await asyncio.sleep(2)
@@ -107,13 +118,19 @@ class ServiceHandler:
                 
             return True
         except Exception as e:
-            logger.error(f"Error killing llama-server: {str(e)}")
+            logger.error(f"Error killing llama-server: {str(e)}", exc_info=True)
             return False
     
     @staticmethod
-    async def reload_llama_server():
+    async def reload_llama_server(service_start_timeout: int = SERVICE_START_TIMEOUT):
         """
         Reload the llama-server process.
+        
+        Args:
+            service_start_timeout: Maximum time in seconds to wait for the service to start
+            
+        Returns:
+            bool: True if the service was successfully started, False otherwise
         """
         try:
             # Get the command to start llama-server from the service info
@@ -121,35 +138,56 @@ class ServiceHandler:
                 logger.error("No running_llm_command found in service info, cannot reload llama-server")
                 return False
                 
-            command = app.state.service_info["running_llm_command"]
-            logger.info(f"Reloading llama-server with command: {command}")
+            running_llm_command = app.state.service_info["running_llm_command"]
+            logger.info(f"Reloading llama-server with command: {running_llm_command}")
             
-            # Start the process in the background
-            process = subprocess.Popen(
-                command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                preexec_fn=os.setpgrp  # Run in a new process group
-            )
+            # Ensure logs directory exists
+            logs_dir.mkdir(exist_ok=True)
             
-            # Wait a moment for the process to start
-            await asyncio.sleep(2)
+            # Set up log file
+            llm_log_stderr = logs_dir / "llm.log"
+            llm_process = None
+            
+            try:
+                with open(llm_log_stderr, 'w') as stderr_log:
+                    llm_process = subprocess.Popen(
+                        running_llm_command,
+                        stderr=stderr_log,
+                        preexec_fn=os.setsid  # Run in a new process group
+                    )
+                logger.info(f"LLM logs written to {llm_log_stderr}")
+            except Exception as e:
+                logger.error(f"Error starting LLM service: {str(e)}", exc_info=True)
+                return False
+            
+            # Wait for the process to start by checking the health endpoint
+            port = app.state.service_info["port"]
+            start_time = time.time()
+            health_check_interval = 1  # Check every second
+            
+            while time.time() - start_time < service_start_timeout:
+                try:
+                    response = requests.get(f"http://localhost:{port}/health", timeout=2)
+                    if response.status_code == 200:
+                        logger.info(f"Service health check passed after {time.time() - start_time:.2f}s")
+                        break
+                except (requests.RequestException, ConnectionError) as e:
+                    # Just wait and try again
+                    await asyncio.sleep(health_check_interval)
             
             # Check if the process is running
-            if process.poll() is None:
+            if llm_process.poll() is None:
                 # Process is running, update the PID in service info
                 if hasattr(app.state, "service_info"):
-                    app.state.service_info["pid"] = process.pid
-                logger.info(f"Successfully reloaded llama-server with PID {process.pid}")
+                    app.state.service_info["pid"] = llm_process.pid
+                logger.info(f"Successfully reloaded llama-server with PID {llm_process.pid}")
                 return True
             else:
                 # Process failed to start
-                stdout, stderr = process.communicate()
-                logger.error(f"Failed to reload llama-server: {stderr.decode()}")
+                logger.error(f"Failed to reload llama-server: Process exited with code {llm_process.returncode}")
                 return False
         except Exception as e:
-            logger.error(f"Error reloading llama-server: {str(e)}")
+            logger.error(f"Error reloading llama-server: {str(e)}", exc_info=True)
             return False
     
     @staticmethod
@@ -787,7 +825,6 @@ async def unload_checker():
         try:
             # Wait for the check interval
             await asyncio.sleep(UNLOAD_CHECK_INTERVAL)
-            logger.info(f"Unload checker task running at {time.time()}")
             
             # Check if the service is running and has been idle for too long
             if (hasattr(app.state, "service_info") and 
@@ -804,7 +841,7 @@ async def unload_checker():
             logger.info("Unload checker task cancelled")
             break
         except Exception as e:
-            logger.error(f"Error in unload checker task: {str(e)}")
+            logger.error(f"Error in unload checker task: {str(e)}", exc_info=True)
             # Continue running despite errors
 
 # Performance monitoring middleware
