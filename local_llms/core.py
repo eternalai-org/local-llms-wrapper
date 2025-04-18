@@ -145,6 +145,7 @@ class LocalLLMManager:
             if is_gemma:
                 # Use pkg_resources to get the absolute path to the template file
                 template_path = pkg_resources.resource_filename("local_llms", "examples/gemma3_template.jinja")
+                grammar_path = pkg_resources.resource_filename("local_llms", "examples/json.gbnf")
                 
                 running_llm_command = [
                     llama_server_path,
@@ -159,6 +160,7 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
+                    "--grammar-file", grammar_path,
                     "--chat-template-file", template_path
                 ]
             else:
@@ -174,6 +176,7 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
+                    "--grammar-file", grammar_path,
                     "--no-webui"
                 ]
             logger.info(f"Starting process: {' '.join(running_llm_command)}")
