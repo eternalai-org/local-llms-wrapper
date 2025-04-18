@@ -50,13 +50,17 @@ class ChatCompletionRequest(BaseModel):
     def fix_messages(self) -> None:
         """
         Fix the messages list to ensure it starts with a system message if it exists.
-        Also replaces null values with empty strings.
+        Also replaces null values with empty strings and ensures content is UTF-8 encoded.
         """
-        # First, replace null values with empty strings
+        # First, replace null values with empty strings and ensure UTF-8 encoding
         for message in self.messages:
             for key in message.keys():
                 if message[key] is None:
                     message[key] = ""
+                elif key == "content" and isinstance(message[key], str):
+                    # Ensure content is UTF-8 encoded
+                    message[key] = message[key].encode('utf-8', errors='replace').decode('utf-8')
+                    
         
         # Then, ensure the messages list starts with a system message if one exists
         system_messages = [msg for msg in self.messages if msg.get("role") == "system"]
@@ -115,9 +119,14 @@ class ChatCompletionResponse(BaseModel):
     def create_from_content(cls, content: Any, model: str):
         """Create a standard response from content."""
         if isinstance(content, str):
+            # Ensure content is UTF-8 encoded
+            content = content.encode('utf-8', errors='replace').decode('utf-8')
             message = {"role": "assistant", "content": content}
         else:
-            message = {"role": "assistant", "content": str(content)}
+            # Convert to string and ensure UTF-8 encoded
+            content_str = str(content)
+            content_str = content_str.encode('utf-8', errors='replace').decode('utf-8')
+            message = {"role": "assistant", "content": content_str}
             
         return cls(
             id=f"chatcmpl-{int(time.time())}{random.randint(10000, 99999)}",
@@ -136,6 +145,11 @@ class ChatCompletionResponse(BaseModel):
     @classmethod
     def create_from_dict(cls, data: Dict[str, Any], model: str):
         """Create a standard response from dictionary data."""
+        content = data.get("content", "")
+        if isinstance(content, str):
+            # Ensure content is UTF-8 encoded
+            content = content.encode('utf-8', errors='replace').decode('utf-8')
+            
         return cls(
             id=data.get("id", f"chatcmpl-{int(time.time())}{random.randint(10000, 99999)}"),
             created=data.get("created", int(time.time())),
@@ -143,7 +157,7 @@ class ChatCompletionResponse(BaseModel):
             choices=[
                 ChatCompletionResponseChoice(
                     index=0,
-                    message={"role": "assistant", "content": data.get("content", "")},
+                    message={"role": "assistant", "content": content},
                     finish_reason=data.get("finish_reason", "stop")
                 )
             ],
@@ -167,6 +181,15 @@ class EmbeddingRequest(BaseModel):
         if isinstance(v, str) and not v.strip():
             raise ValueError("input string cannot be empty")
         return v
+    
+    @validator("input")
+    def ensure_utf8_encoding(cls, v):
+        """Ensure input is UTF-8 encoded."""
+        if isinstance(v, str):
+            return v.encode('utf-8', errors='replace').decode('utf-8')
+        elif isinstance(v, list):
+            return [item.encode('utf-8', errors='replace').decode('utf-8') if isinstance(item, str) else item for item in v]
+        return v
 
 class EmbeddingResponseData(BaseModel):
     """Model for a single embedding in a response."""
@@ -184,6 +207,9 @@ class EmbeddingResponse(BaseModel):
     @classmethod
     def create_from_embeddings(cls, embeddings: List[List[float]], model: str, input_texts: List[str]):
         """Create a standard response from a list of embeddings."""
+        # Ensure input texts are UTF-8 encoded
+        input_texts = [text.encode('utf-8', errors='replace').decode('utf-8') if isinstance(text, str) else text for text in input_texts]
+        
         data = []
         for i, embedding in enumerate(embeddings):
             if i < len(input_texts):  # Guard against index errors
