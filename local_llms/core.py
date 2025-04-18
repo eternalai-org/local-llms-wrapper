@@ -130,6 +130,7 @@ class LocalLLMManager:
             }
             filecoin_url = f"https://gateway.lighthouse.storage/ipfs/{hash}"
             is_gemma = False
+            is_qwen_25 = False
             for attempt in range(3):
                 try:
                     response = requests.get(filecoin_url, timeout=10)
@@ -138,6 +139,7 @@ class LocalLLMManager:
                         service_metadata["family"] = response_json.get("family", "")
                         folder_name = response_json["folder_name"]
                         is_gemma = True if "gemma" in folder_name.lower() else False
+                        is_qwen_25 = True if "qwen2.5" in folder_name.lower() else False
                         break
                 except requests.exceptions.RequestException:
                     time.sleep(5)  # Delay between retries
@@ -146,6 +148,23 @@ class LocalLLMManager:
                 # Use pkg_resources to get the absolute path to the template file
                 template_path = pkg_resources.resource_filename("local_llms", "examples/gemma3_template.jinja")
                 
+                running_llm_command = [
+                    llama_server_path,
+                    "--model", str(local_model_path),
+                    "--port", str(llm_running_port),
+                    "--host", host,
+                    "-c", str(context_length),
+                    "-fa",
+                    "--pooling", "cls",
+                    "--no-webui",
+                    "-ngl", "-1",
+                    "--no-mmap",
+                    "--mlock",
+                    "--jinja",
+                    "--chat-template-file", template_path
+                ]
+            elif is_qwen_25:
+                template_path = pkg_resources.resource_filename("local_llms", "examples/qwen25_template.jinja")
                 running_llm_command = [
                     llama_server_path,
                     "--model", str(local_model_path),
