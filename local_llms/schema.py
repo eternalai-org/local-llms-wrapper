@@ -50,7 +50,7 @@ class ChatCompletionRequest(BaseModel):
     def fix_messages(self) -> None:
         """
         Fix the messages list to ensure it starts with a system message if it exists.
-        Also replaces null values with empty strings and ensures content is UTF-8 encoded.
+        Also replaces null values with empty strings and ensures UTF-8 encoding.
         """
         # First, replace null values with empty strings and ensure UTF-8 encoding
         for message in self.messages:
@@ -59,8 +59,12 @@ class ChatCompletionRequest(BaseModel):
                     message[key] = ""
                 elif key == "content" and isinstance(message[key], str):
                     # Ensure content is UTF-8 encoded
-                    message[key] = message[key].encode('utf-8', errors='replace').decode('utf-8')
-                    
+                    try:
+                        # Try to encode and decode to validate UTF-8
+                        message[key].encode('utf-8').decode('utf-8')
+                    except UnicodeError:
+                        # If not valid UTF-8, try to fix it
+                        message[key] = message[key].encode('utf-8', errors='replace').decode('utf-8')
         
         # Then, ensure the messages list starts with a system message if one exists
         system_messages = [msg for msg in self.messages if msg.get("role") == "system"]
@@ -120,12 +124,20 @@ class ChatCompletionResponse(BaseModel):
         """Create a standard response from content."""
         if isinstance(content, str):
             # Ensure content is UTF-8 encoded
-            content = content.encode('utf-8', errors='replace').decode('utf-8')
+            try:
+                # Try to encode and decode to validate UTF-8
+                content.encode('utf-8').decode('utf-8')
+            except UnicodeError:
+                # If not valid UTF-8, try to fix it
+                content = content.encode('utf-8', errors='replace').decode('utf-8')
             message = {"role": "assistant", "content": content}
         else:
-            # Convert to string and ensure UTF-8 encoded
+            # Convert non-string content to string and ensure UTF-8
             content_str = str(content)
-            content_str = content_str.encode('utf-8', errors='replace').decode('utf-8')
+            try:
+                content_str.encode('utf-8').decode('utf-8')
+            except UnicodeError:
+                content_str = content_str.encode('utf-8', errors='replace').decode('utf-8')
             message = {"role": "assistant", "content": content_str}
             
         return cls(
@@ -148,8 +160,11 @@ class ChatCompletionResponse(BaseModel):
         content = data.get("content", "")
         if isinstance(content, str):
             # Ensure content is UTF-8 encoded
-            content = content.encode('utf-8', errors='replace').decode('utf-8')
-            
+            try:
+                content.encode('utf-8').decode('utf-8')
+            except UnicodeError:
+                content = content.encode('utf-8', errors='replace').decode('utf-8')
+        
         return cls(
             id=data.get("id", f"chatcmpl-{int(time.time())}{random.randint(10000, 99999)}"),
             created=data.get("created", int(time.time())),
@@ -181,15 +196,6 @@ class EmbeddingRequest(BaseModel):
         if isinstance(v, str) and not v.strip():
             raise ValueError("input string cannot be empty")
         return v
-    
-    @validator("input")
-    def ensure_utf8_encoding(cls, v):
-        """Ensure input is UTF-8 encoded."""
-        if isinstance(v, str):
-            return v.encode('utf-8', errors='replace').decode('utf-8')
-        elif isinstance(v, list):
-            return [item.encode('utf-8', errors='replace').decode('utf-8') if isinstance(item, str) else item for item in v]
-        return v
 
 class EmbeddingResponseData(BaseModel):
     """Model for a single embedding in a response."""
@@ -207,9 +213,6 @@ class EmbeddingResponse(BaseModel):
     @classmethod
     def create_from_embeddings(cls, embeddings: List[List[float]], model: str, input_texts: List[str]):
         """Create a standard response from a list of embeddings."""
-        # Ensure input texts are UTF-8 encoded
-        input_texts = [text.encode('utf-8', errors='replace').decode('utf-8') if isinstance(text, str) else text for text in input_texts]
-        
         data = []
         for i, embedding in enumerate(embeddings):
             if i < len(input_texts):  # Guard against index errors

@@ -195,6 +195,7 @@ class ServiceHandler:
     def _detect_and_fix_tool_calls_in_content(response_data: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
         """
         Detect and fix malformed tool calls that are encoded as JSON strings in content.
+        Also ensures content is UTF-8 encoded.
         
         Args:
             response_data: The response data from the LLM
@@ -227,6 +228,16 @@ class ServiceHandler:
                 continue
             
             content = message["content"]
+            
+            # Ensure content is UTF-8 encoded if it's a string
+            if isinstance(content, str):
+                try:
+                    # Try to encode and decode to validate UTF-8
+                    content.encode('utf-8').decode('utf-8')
+                except UnicodeError:
+                    # If not valid UTF-8, try to fix it
+                    content = content.encode('utf-8', errors='replace').decode('utf-8')
+                    message["content"] = content
             
             # Check if content contains a JSON string with tool_calls
             if not isinstance(content, str) or "tool_calls" not in content:
@@ -564,6 +575,7 @@ class ServiceHandler:
         """
         Generator for streaming responses from the service.
         Yields chunks of data as they are received, formatted for SSE (Server-Sent Events).
+        Ensures content is UTF-8 encoded.
         """
         try:
             async with app.state.client.stream(
@@ -574,6 +586,11 @@ class ServiceHandler:
             ) as response:
                 if response.status_code != 200:
                     error_text = await response.text()
+                    # Ensure error text is UTF-8 encoded
+                    try:
+                        error_text.encode('utf-8').decode('utf-8')
+                    except UnicodeError:
+                        error_text = error_text.encode('utf-8', errors='replace').decode('utf-8')
                     error_msg = f"data: {{\"error\":{{\"message\":\"{error_text}\",\"code\":{response.status_code}}}}}\n\n"
                     logger.error(f"Streaming error: {response.status_code} - {error_text}")
                     yield error_msg
@@ -581,10 +598,21 @@ class ServiceHandler:
                     
                 async for line in response.aiter_lines():
                     if line:
+                        # Ensure line is UTF-8 encoded
+                        try:
+                            line.encode('utf-8').decode('utf-8')
+                        except UnicodeError:
+                            line = line.encode('utf-8', errors='replace').decode('utf-8')
                         yield f"{line}\n\n"
         except Exception as e:
-            logger.error(f"Error during streaming: {e}")
-            yield f"data: {{\"error\":{{\"message\":\"{str(e)}\",\"code\":500}}}}\n\n"
+            error_msg = str(e)
+            # Ensure error message is UTF-8 encoded
+            try:
+                error_msg.encode('utf-8').decode('utf-8')
+            except UnicodeError:
+                error_msg = error_msg.encode('utf-8', errors='replace').decode('utf-8')
+            logger.error(f"Error during streaming: {error_msg}")
+            yield f"data: {{\"error\":{{\"message\":\"{error_msg}\",\"code\":500}}}}\n\n"
 
     @staticmethod
     async def _fake_stream_with_tools(formatted_response: dict, model: str):
