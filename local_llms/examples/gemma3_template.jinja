@@ -1,152 +1,84 @@
-{%- macro json_to_python_type(json_spec) %}
-{%- set basic_type_map = {
-    "string": "str",
-    "number": "float",
-    "integer": "int",
-    "boolean": "bool"
-} %}
-
-{%- if basic_type_map[json_spec.type] is defined %}
-    {{- basic_type_map[json_spec.type] }}
-{%- elif json_spec.type == "array" %}
-    {{- "list[" +  json_to_python_type(json_spec|items) + "]"}}
-{%- elif json_spec.type == "object" %}
-    {%- if json_spec.additionalProperties is defined %}
-        {{- "dict[str, " + json_to_python_type(json_spec.additionalProperties) + ']'}}
-    {%- else %}
-        {{- "dict" }}
-    {%- endif %}
-{%- elif json_spec.type is iterable %}
-    {{- "Union[" }}
-    {%- for t in json_spec.type %}
-      {{- json_to_python_type({"type": t}) }}
-      {%- if not loop.last %}
-        {{- "," }} 
-    {%- endif %}
-    {%- endfor %}
-    {{- "]" }}
-{%- else %}
-    {{- "Any" }}
+{{ bos_token }}
+{%- if messages[0]['role'] == 'system' -%}
+    {%- if messages[0]['content'] is string -%}
+        {%- set first_user_prefix = messages[0]['content'] + '\n\n' -%}
+    {%- else -%}
+        {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
+    {%- endif -%}
+    {%- set loop_messages = messages[1:] -%}
+{%- else -%}
+    {%- set first_user_prefix = "" -%}
+    {%- set loop_messages = messages -%}
+{%- endif -%}
+{%- if not tools is defined %}
+    {%- set tools = none %}
 {%- endif %}
-{%- endmacro %}
+{%- for message in loop_messages | rejectattr("role", "equalto", "tool") | selectattr("tool_calls", "undefined") -%}
+    {%- if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}
+        {{ raise_exception("Conversation roles must alternate user/assistant/user/assistant/...") }}
+    {%- endif -%}
+{%- endfor -%}
+{%- for message in loop_messages -%}
+    {%- if (message['role'] == 'assistant') -%}
+        {%- set role = "model" -%}
+    {%- elif (message['role'] == 'tool') -%}
+        {%- set role = "user" -%}
+    {%- else -%}
+        {%- set role = message['role'] -%}
+    {%- endif -%}
+    {{ '<start_of_turn>' + role + '\n' -}}
+    {%- if loop.first -%}
+        {{ first_user_prefix }}
+        {%- if tools is not none -%}
+            {{- "You have access to the following tools to help respond to the user. To call tools, please respond with a python list of the calls. DO NOT USE MARKDOWN SYNTAX.\n" }}
+            {{- 'Respond in the format [func_name1(params_name1=params_value1, params_name2=params_value2...), func_name2(params)] \n' }}
+            {{- "Do not use variables.\n\n" }}
+            {%- for t in tools -%}
+                {{- t | tojson(indent=4) }}
+                {{- "\n\n" }}
+            {%- endfor -%}
+        {%- endif -%}
+    {%- endif -%}
 
+    {%- if 'tool_calls' in message -%}
+        {{- '[' -}}
+        {%- for tool_call in message.tool_calls -%}
+            {%- if tool_call.function is defined -%}
+                {%- set tool_call = tool_call.function -%}
+            {%- endif -%}
+            {{- tool_call.name + '(' -}}
+            {%- for param in tool_call.arguments -%}
+                {{- param + '=' -}}
+                {{- "%sr" | format(tool_call.arguments[param]) -}}
+                {%- if not loop.last -%}, {% endif -%}
+            {%- endfor -%}
+            {{- ')' -}}
+            {%- if not loop.last -%},{%- endif -%}
+        {%- endfor -%}
+        {{- ']' -}}
+    {%- endif -%}
 
-{{- bos_token }}
-{{- '<start_of_turn>system
-' }}
-{{- "You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions. Here are the available tools: <tools> " }}
-{%- for tool in tools %}
-    {%- if tool.function is defined %}
-        {%- set tool = tool.function %}
-    {%- endif %}
-    {{- '{"type": "function", "function": ' }}
-    {{- '{"name": "' + tool.name + '", ' }}
-    {{- '"description": "' + tool.name + '(' }}
-    {%- for param_name, param_fields in tool.parameters.properties|items %}
-        {{- param_name + ": " + json_to_python_type(param_fields) }}
-        {%- if not loop.last %}
-            {{- ", " }}
-        {%- endif %}
-    {%- endfor %}
-    {{- ")" }}
-    {%- if tool.return is defined %}
-        {{- " -> " + json_to_python_type(tool.return) }}
-    {%- endif %}
-    {{- " - " + tool.description + "
-
-" }}
-    {%- for param_name, param_fields in tool.parameters.properties|items %}
-        {%- if loop.first %}
-            {{- "    Args:
-" }}
-        {%- endif %}
-        {{- "        " + param_name + "(" + json_to_python_type(param_fields) + "): " + param_fields.description|trim }}
-    {%- endfor %}
-    {%- if tool.return is defined and tool.return.description is defined %}
-        {{- "
-    Returns:
-        " + tool.return.description }}
-    {%- endif %}
-    {{- '"' }}
-    {{- ', "parameters": ' }}
-    {%- if tool.parameters.properties | length == 0 %}
-        {{- "{}" }}
-    {%- else %}
-        {{- tool.parameters|tojson }}
-    {%- endif %}
-    {{- "}" }}
-    {%- if not loop.last %}
-        {{- "
-" }}
-    {%- endif %}
-{%- endfor %}
-{{- " </tools>" }}
-{{- 'Use the following pydantic model json schema for each tool call you will make: {"properties": {"name": {"title": "Name", "type": "string"}, "arguments": {"title": "Arguments", "type": "object"}}, "required": ["name", "arguments"], "title": "FunctionCall", "type": "object"}}
-' }}
-{{- "For each function call return a json object with function name and arguments within <tool_call></tool_call> XML tags as follows:
-" }}
-{{- "<tool_call>
-" }}
-{{- '{"name": <function-name>, "arguments": <args-dict>}
-' }}
-{{- '</tool_call><end_of_turn>
-' }}
-{%- for message in messages %}
-    {%- if message.role == "user" or message.role == "system" or (message.role == "assistant" and message.tool_calls is not defined) %}
-        {{- '<start_of_turn>' + message.role + '
-' + message.content + '<end_of_turn>' + '
-' }}
-    {%- elif message.role == "assistant" %}
-        {{- '<start_of_turn>' + message.role }}
-    {%- for tool_call in message.tool_calls %}
-       {{- '
-<tool_call>
-' }}           {%- if tool_call.function is defined %}
-                {%- set tool_call = tool_call.function %}
-            {%- endif %}
-            {{- '{' }}
-            {{- '"name": "' }}
-            {{- tool_call.name }}
-            {{- '"' }}
-            {{- ', '}}
-            {%- if tool_call.arguments is defined %}
-                {{- '"arguments": ' }}
-                {%- if tool_call.arguments is string %}
-                    {{- tool_call.arguments }}
-                {%- else %}
-                    {{- tool_call.arguments|tojson }}
-                {%- endif %}
-            {%- endif %}
-             {{- '}' }}
-            {{- '
-</tool_call>' }}
-    {%- endfor %}
-        {{- '<end_of_turn>' }}
-' }}
-    {%- elif message.role == "tool" %}
-        {%- if loop.previtem and loop.previtem.role != "tool" %}
-            {{- '<start_of_turn>tool
-' }}
-        {%- endif %}
-        {{- '<tool_response>
-' }}
-        {{- message.content }}
-        {%- if not loop.last %}
-            {{- '
-</tool_response>
-' }}
-        {%- else %}
-            {{- '
-</tool_response>' }}
-        {%- endif %}
-        {%- if not loop.last and loop.nextitem.role != "tool" %}
-            {{- '<end_of_turn>' }}
-        {%- elif loop.last %}
-            {{- '<end_of_turn>' }}
-        {%- endif %}
-    {%- endif %}
-{%- endfor %}
-{%- if add_generation_prompt %}
-    {{- '<start_of_turn>assistant
-' }}
-{%- endif %}
+    {%- if (message['role'] == 'tool') -%}
+        {{ '<tool_response>\n' -}}
+    {%- endif -%}
+    {%- if message['content'] is string -%}
+        {{ message['content'] | trim }}
+    {%- elif message['content'] is iterable -%}
+        {%- for item in message['content'] -%}
+            {%- if item['type'] == 'image' -%}
+                {{ '<start_of_image>' }}
+            {%- elif item['type'] == 'text' -%}
+                {{ item['text'] | trim }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{ raise_exception("Invalid content type") }}
+    {%- endif -%}
+    {%- if (message['role'] == 'tool') -%}
+        {{ '</tool_response>' -}}
+    {%- endif -%}
+    {{ '<end_of_turn>\n' }}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{'<start_of_turn>model\n'}}
+{%- endif -%}
