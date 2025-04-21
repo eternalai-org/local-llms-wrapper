@@ -161,6 +161,7 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
+                    "--grammar", 'root ::= "<unused25>"',
                     "--chat-template-file", template_path
                 ]
             elif is_qwen_25:

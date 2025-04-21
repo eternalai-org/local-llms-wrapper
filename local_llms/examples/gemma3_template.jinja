@@ -12,11 +12,6 @@
   {%- set loop_messages = messages -%}
 {%- endif -%}
 
-{%- macro replace_tokens(text) -%}
-  {%- set regex = r"<unused\d*>" -%}
-  {{- text | regex_replace(regex, "<unk>") -}}
-{%- endmacro -%}
-
 {%- for message in loop_messages -%}
   
   {%- if (message['role'] == 'assistant') -%}
@@ -25,16 +20,16 @@
     {%- set role = message['role'] -%}
   {%- endif -%}
   
-  {{ '<start_of_turn>' + role + '\n' + (replace_tokens(first_user_prefix) if loop.first else "") }}
+  {{ '<start_of_turn>' + role + '\n' + (first_user_prefix if loop.first else "") }}
   
   {%- if message['content'] is string -%}
-    {{ replace_tokens(message['content']) }}
+    {{ message['content'] }}
   {%- elif message['content'] is iterable -%}
     {%- for item in message['content'] -%}
       {%- if item['type'] == 'image' -%}
         {{ '<start_of_image>' }}
       {%- elif item['type'] == 'text' -%}
-        {{ replace_tokens(item['text']) }}
+        {{ item['text'] }}
       {%- endif -%}
     {%- endfor -%}
   {%- else -%}
