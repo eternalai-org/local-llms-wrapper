@@ -58,6 +58,8 @@ class ChatCompletionRequest(BaseModel):
         # Simple estimation: ~4 characters per token
         total_chars = sum(len(str(msg.get("content", ""))) for msg in v)
         estimated_tokens = total_chars // 4
+
+        print(f"Estimated tokens: {estimated_tokens}")
         
         if estimated_tokens > MAX_CONTEXT_LENGTH:
             raise ValueError(f"Estimated context length ({estimated_tokens} tokens) exceeds maximum allowed ({MAX_CONTEXT_LENGTH} tokens)")
