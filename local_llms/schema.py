@@ -39,51 +39,23 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = None   # Presence penalty
     stop: Optional[Union[str, List[str]]] = None  # Stop sequences
     seed: Optional[int] = 0   # Seed for reproducibility
-
-    @validator("messages")
-    def check_messages_not_empty(cls, v):
-        """
-        Ensure that the messages list is not empty.
-        """
-        if not v:
-            raise ValueError("messages cannot be empty")
-        return v
     
-    @validator("messages", "tools")
-    def clean_special_box_text(cls, v, values, field=None, **kwargs):
+    @validator("messages")
+    def clean_messages_content(cls, v):
         """
         Clean special box text from the messages or tools.
-        """
-        field_name = field.name if field else None
-        
-        if field_name == "messages" and v:
-            for message in v:
-                content = message.get("content")
-                if isinstance(content, str):
-                    message["content"] = content.replace("\u250c", "").replace("\u2510", "")
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, dict) and item.get("type") == "text":
-                            item["text"] = item["text"].replace("\u250c", "").replace("\u2510", "")
-        
-        elif field_name == "tools" and v:
-            for tool in v:
-                # Clean function descriptions if present
-                if "function" in tool:
-                    function = tool["function"]
-                    if "description" in function and isinstance(function["description"], str):
-                        function["description"] = function["description"].replace("\u250c", "").replace("\u2510", "")
-                    
-                    # Clean parameters descriptions if present
-                    if "parameters" in function and isinstance(function["parameters"], dict):
-                        params = function["parameters"]
-                        if "properties" in params and isinstance(params["properties"], dict):
-                            for prop in params["properties"].values():
-                                if "description" in prop and isinstance(prop["description"], str):
-                                    prop["description"] = prop["description"].replace("\u250c", "").replace("\u2510", "")
-        # If field_name is None, just return the value as is
+        """    
+        if not v:
+            raise ValueError("messages cannot be empty")
+        for message in v:
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = content.replace("\u250c", "").replace("\u2510", "")
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        item["text"] = item["text"].replace("\u250c", "").replace("\u2510", "")
         return v
-
     
     def fix_messages(self) -> None:
         """
