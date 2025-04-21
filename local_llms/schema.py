@@ -50,11 +50,11 @@ class ChatCompletionRequest(BaseModel):
         return v
     
     @validator("messages", "tools")
-    def clean_special_box_text(cls, v, values, **kwargs):
+    def clean_special_box_text(cls, v, values, field=None, **kwargs):
         """
         Clean special box text from the messages or tools.
         """
-        field_name = kwargs["field"].name
+        field_name = field.name if field else None
         
         if field_name == "messages" and v:
             for message in v:
@@ -81,7 +81,7 @@ class ChatCompletionRequest(BaseModel):
                             for prop in params["properties"].values():
                                 if "description" in prop and isinstance(prop["description"], str):
                                     prop["description"] = prop["description"].replace("\u250c", "").replace("\u2510", "")
-        
+        # If field_name is None, just return the value as is
         return v
 
     
