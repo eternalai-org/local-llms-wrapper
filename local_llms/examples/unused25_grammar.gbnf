@@ -1,0 +1,11 @@
+# Grammar that explicitly supports <unused25> token
+root ::= (text | special_token)*
+
+# Regular text can include any standard characters
+text ::= [a-zA-Z0-9 \t\n.,!?;:()\[\]\"\']+
+
+# Special token definition
+special_token ::= "<unused25>"
+
+# For additional special tokens if needed, you can add them here
+# other_special_token ::= "<unused26>" | "<unused27>" | etc.

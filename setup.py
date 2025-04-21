@@ -7,7 +7,8 @@ setup(
     packages=find_packages(),
     package_data={
         "local_llms": [
-            "examples/*.jinja"
+            "examples/*.jinja",
+            "examples/*.gbnf"
         ],
     },
     include_package_data=True,
