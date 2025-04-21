@@ -7,6 +7,8 @@ import random
 from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Optional, Union, Any
 
+MAX_CONTEXT_LENGTH = 30000
+
 # Configuration
 class Config:
     """
@@ -45,6 +47,20 @@ class ChatCompletionRequest(BaseModel):
         """
         if not v:
             raise ValueError("messages cannot be empty")
+        return v
+    
+    @validator("messages")
+    def check_context_length(cls, v):
+        """
+        Estimate token count and ensure it doesn't exceed max_context_length.
+        This is a simple estimation - approximately 4 chars per token.
+        """
+        # Simple estimation: ~4 characters per token
+        total_chars = sum(len(str(msg.get("content", ""))) for msg in v)
+        estimated_tokens = total_chars // 4
+        
+        if estimated_tokens > MAX_CONTEXT_LENGTH:
+            raise ValueError(f"Estimated context length ({estimated_tokens} tokens) exceeds maximum allowed ({MAX_CONTEXT_LENGTH} tokens)")
         return v
     
     def fix_messages(self) -> None:
@@ -110,6 +126,7 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: List[ChatCompletionResponseChoice]
     usage: Dict[str, int]
+    
 
     @classmethod
     def create_from_content(cls, content: Any, model: str):
