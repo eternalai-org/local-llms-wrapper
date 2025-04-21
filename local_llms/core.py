@@ -155,7 +155,7 @@ class LocalLLMManager:
                     "--host", host,
                     "-c", str(context_length),
                     "-fa",
-                    "--pooling", "cls",
+                    "--pooling", "mean",
                     "--no-webui",
                     "-ngl", "-1",
                     "--no-mmap",

@@ -413,7 +413,7 @@ class ServiceHandler:
             return response_data
     
     @staticmethod
-    async def _make_api_call(port: int, endpoint: str, data: dict, retries: int = Config.MAX_RETRIES) -> dict:
+    async def _make_api_call(port: int, endpoint: str, data: dict) -> dict:
         """
         Make a non-streaming API call to the specified endpoint and return the JSON response.
         Includes retry logic for transient errors.
@@ -433,11 +433,8 @@ class ServiceHandler:
                 # Don't retry client errors (4xx), only server errors (5xx)
                 if response.status_code < 500:
                     raise HTTPException(status_code=response.status_code, detail=error_text)
-                last_exception = HTTPException(status_code=response.status_code, detail=error_text)
             else:
-                response_data = response.json()
-                
-                return response_data
+                return response.json()
         except httpx.TimeoutException as e:
             raise HTTPException(status_code=504, detail=str(e))
         except Exception as e:

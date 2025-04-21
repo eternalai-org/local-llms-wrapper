@@ -3,11 +3,18 @@ Schema definitions for API requests and responses following OpenAI's API standar
 """
 
 import time
+import re
 import random
-from pydantic import BaseModel, Field, validator
-from typing import List, Dict, Optional, Union, Any
+from pydantic import BaseModel, Field, validator, root_validator
+from typing import List, Dict, Optional, Union, Any, ClassVar
 
 MAX_CONTEXT_LENGTH = 30000
+
+# Precompile regex patterns for better performance
+UNICODE_BOX_PATTERN = re.compile(r'\\u25[0-9a-fA-F]{2}')
+NEWLINE_PATTERN = re.compile(r'\\n')
+BACKTICKS_START_PATTERN = re.compile(r'```(?:\\n)?(?:\w+)?')
+BACKTICKS_END_PATTERN = re.compile(r'```')
 
 # Configuration
 class Config:
@@ -38,42 +45,59 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: Optional[float] = None  # Frequency penalty
     presence_penalty: Optional[float] = None   # Presence penalty
     stop: Optional[Union[str, List[str]]] = None  # Stop sequences
-    seed: Optional[int] = 0   # Seed for reproducibility
+    seed: Optional[int] = 0                 # Seed for reproducibility
     
     @validator("messages")
-    def clean_messages_content(cls, v):
+    def validate_messages(cls, v):
         """
-        Clean special box text from the messages or tools.
+        Validate that messages list is not empty.
         """    
         if not v:
             raise ValueError("messages cannot be empty")
-        for message in v:
-            content = message.get("content")
-            if isinstance(content, str):
-                message["content"] = content.replace("\u250c", "").replace("\u2510", "")
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        item["text"] = item["text"].replace("\u250c", "").replace("\u2510", "")
         return v
     
     def fix_messages(self) -> None:
         """
         Fix the messages list to ensure it starts with a system message if it exists.
-        Also replaces null values with empty strings.
+        Also replaces null values with empty strings and cleans special box text.
         """
-        # First, replace null values with empty strings
+        def clean_special_box_text(input_text):
+            if not isinstance(input_text, str):
+                return ""
+            # Apply all regex substitutions in one pass
+            text = UNICODE_BOX_PATTERN.sub('', input_text)
+            text = NEWLINE_PATTERN.sub('', text)
+            text = BACKTICKS_START_PATTERN.sub('', text)
+            text = BACKTICKS_END_PATTERN.sub('', text)
+            return text.strip()
+        
+        # Process all messages at once
+        system_messages = []
+        non_system_messages = []
+        
         for message in self.messages:
-            for key in message.keys():
+            # Replace null values with empty strings
+            for key in message:
                 if message[key] is None:
                     message[key] = ""
+            
+            # Clean content
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = clean_special_box_text(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        item["text"] = clean_special_box_text(item.get("text", ""))
+            
+            # Sort messages by role
+            if message.get("role") == "system":
+                system_messages.append(message)
+            else:
+                non_system_messages.append(message)
         
-        # Then, ensure the messages list starts with a system message if one exists
-        system_messages = [msg for msg in self.messages if msg.get("role") == "system"]
-        non_system_messages = [msg for msg in self.messages if msg.get("role") != "system"]
-        
+        # Reorder messages to ensure system message comes first if it exists
         if system_messages:
-            # If there are system messages, put the first one at the beginning
             self.messages = [system_messages[0]] + non_system_messages
     
     def is_vision_request(self) -> bool:
@@ -81,29 +105,32 @@ class ChatCompletionRequest(BaseModel):
         Check if the request includes image content, indicating a vision-based request.
         If so, switch the model to the vision model.
         """
-        # Early optimization - only check the last message from the user
+        # Check if messages is empty first
         if not self.messages:
             return False
             
+        # Optimization: Check only the last user message first
         last_message = self.messages[-1]
-        if last_message.get("role") != "user":
-            # Check all messages if the last one is not from user
-            for message in self.messages:
-                if self._check_message_for_image(message):
-                    return True
-            return False
-            
-        # Check just the last user message
-        return self._check_message_for_image(last_message)
+        if last_message.get("role") == "user" and self._check_message_for_image(last_message):
+            return True
+        
+        # Fall back to checking all messages
+        for message in self.messages:
+            if message.get("role") == "user" and self._check_message_for_image(message):
+                return True
+                
+        return False
     
-    def _check_message_for_image(self, message: Any) -> bool:
+    def _check_message_for_image(self, message: Dict[str, Any]) -> bool:
         """Helper method to check if a message contains an image."""
         content = message.get("content")
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "image_url":
-                    self.model = Config.VISION_MODEL    
-                    return True
+        if not isinstance(content, list):
+            return False
+            
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "image_url":
+                self.model = Config.VISION_MODEL    
+                return True
         return False
 
 class ChatCompletionResponseChoice(BaseModel):
@@ -121,18 +148,15 @@ class ChatCompletionResponse(BaseModel):
     choices: List[ChatCompletionResponseChoice]
     usage: Dict[str, int]
     
-
     @classmethod
     def create_from_content(cls, content: Any, model: str):
         """Create a standard response from content."""
-        if isinstance(content, str):
-            message = {"role": "assistant", "content": content}
-        else:
-            message = {"role": "assistant", "content": str(content)}
+        timestamp = int(time.time())
+        message = {"role": "assistant", "content": content if isinstance(content, str) else str(content)}
             
         return cls(
-            id=f"chatcmpl-{int(time.time())}{random.randint(10000, 99999)}",
-            created=int(time.time()),
+            id=f"chatcmpl-{timestamp}{random.randint(10000, 99999)}",
+            created=timestamp,
             model=model,
             choices=[
                 ChatCompletionResponseChoice(
@@ -147,9 +171,10 @@ class ChatCompletionResponse(BaseModel):
     @classmethod
     def create_from_dict(cls, data: Dict[str, Any], model: str):
         """Create a standard response from dictionary data."""
+        timestamp = int(time.time())
         return cls(
-            id=data.get("id", f"chatcmpl-{int(time.time())}{random.randint(10000, 99999)}"),
-            created=data.get("created", int(time.time())),
+            id=data.get("id", f"chatcmpl-{timestamp}{random.randint(10000, 99999)}"),
+            created=data.get("created", timestamp),
             model=model,
             choices=[
                 ChatCompletionResponseChoice(
@@ -191,32 +216,30 @@ class EmbeddingResponse(BaseModel):
     data: List[EmbeddingResponseData]
     model: str
     usage: Dict[str, int]
+    
+    # Default empty usage dict
+    DEFAULT_USAGE: ClassVar[Dict[str, int]] = {"prompt_tokens": 0, "total_tokens": 0}
 
     @classmethod
     def create_from_embeddings(cls, embeddings: List[List[float]], model: str, input_texts: List[str]):
         """Create a standard response from a list of embeddings."""
-        data = []
-        for i, embedding in enumerate(embeddings):
-            if i < len(input_texts):  # Guard against index errors
-                data.append(EmbeddingResponseData(
-                    embedding=embedding,
-                    index=i
-                ))
+        data = [
+            EmbeddingResponseData(embedding=embedding, index=i)
+            for i, embedding in enumerate(embeddings)
+            if i < len(input_texts)  # Guard against index errors
+        ]
                 
         return cls(
             data=data,
             model=model,
-            usage={"prompt_tokens": 0, "total_tokens": 0}
+            usage=cls.DEFAULT_USAGE
         )
 
     @classmethod
     def create_from_single_embedding(cls, embedding: List[float], model: str, usage: Optional[Dict[str, int]] = None):
         """Create a standard response from a single embedding."""
         return cls(
-            data=[EmbeddingResponseData(
-                embedding=embedding,
-                index=0
-            )],
+            data=[EmbeddingResponseData(embedding=embedding, index=0)],
             model=model,
-            usage=usage or {"prompt_tokens": 0, "total_tokens": 0}
+            usage=usage or cls.DEFAULT_USAGE
         ) 
