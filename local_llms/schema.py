@@ -49,21 +49,41 @@ class ChatCompletionRequest(BaseModel):
             raise ValueError("messages cannot be empty")
         return v
     
-    @validator("messages")
-    def check_context_length(cls, v):
+    @validator("messages", "tools")
+    def clean_special_box_text(cls, v, values, **kwargs):
         """
-        Estimate token count and ensure it doesn't exceed max_context_length.
-        This is a simple estimation - approximately 4 chars per token.
+        Clean special box text from the messages or tools.
         """
-        # Simple estimation: ~4 characters per token
-        total_chars = sum(len(str(msg.get("content", ""))) for msg in v)
-        estimated_tokens = total_chars // 4
-
-        print(f"Estimated tokens: {estimated_tokens}")
+        field_name = kwargs["field"].name
         
-        if estimated_tokens > MAX_CONTEXT_LENGTH:
-            raise ValueError(f"Estimated context length ({estimated_tokens} tokens) exceeds maximum allowed ({MAX_CONTEXT_LENGTH} tokens)")
+        if field_name == "messages" and v:
+            for message in v:
+                content = message.get("content")
+                if isinstance(content, str):
+                    message["content"] = content.replace("\u250c", "").replace("\u2510", "")
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            item["text"] = item["text"].replace("\u250c", "").replace("\u2510", "")
+        
+        elif field_name == "tools" and v:
+            for tool in v:
+                # Clean function descriptions if present
+                if "function" in tool:
+                    function = tool["function"]
+                    if "description" in function and isinstance(function["description"], str):
+                        function["description"] = function["description"].replace("\u250c", "").replace("\u2510", "")
+                    
+                    # Clean parameters descriptions if present
+                    if "parameters" in function and isinstance(function["parameters"], dict):
+                        params = function["parameters"]
+                        if "properties" in params and isinstance(params["properties"], dict):
+                            for prop in params["properties"].values():
+                                if "description" in prop and isinstance(prop["description"], str):
+                                    prop["description"] = prop["description"].replace("\u250c", "").replace("\u2510", "")
+        
         return v
+
     
     def fix_messages(self) -> None:
         """
