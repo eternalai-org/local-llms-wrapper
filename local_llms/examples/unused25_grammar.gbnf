@@ -1,11 +1,15 @@
-# Grammar that explicitly supports <unused25> token
-root ::= (text | special_token)*
+# Grammar that robustly handles <unused25> token
+root ::= element*
+element ::= text | special_token | ws
 
-# Regular text can include any standard characters
-text ::= [a-zA-Z0-9 \t\n.,!?;:()\[\]\"\']+
+# Whitespace
+ws ::= [ \t\n]+
 
-# Special token definition
-special_token ::= "<unused25>"
+# Regular text can include any standard characters except the special token markers
+text ::= [a-zA-Z0-9.,!?;:()\[\]\"\']+
 
-# For additional special tokens if needed, you can add them here
-# other_special_token ::= "<unused26>" | "<unused27>" | etc.
+# Explicitly handle special token with its surrounding angle brackets
+special_token ::= "<" "unused25" ">"
+
+# Add more patterns for other special tokens if needed
+# special_token2 ::= "<" "unused26" ">"
