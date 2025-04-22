@@ -141,7 +141,7 @@ class LocalLLMManager:
                 except requests.exceptions.RequestException:
                     time.sleep(5)  # Delay between retries
 
-            if folder_name.lower() in ["gemma"]:
+            if "gemma" in folder_name.lower():
                 # Use pkg_resources to get the absolute path to the template file
                 template_path = pkg_resources.resource_filename("local_llms", "examples/gemma3_template.jinja")
                 running_llm_command = [
@@ -159,7 +159,7 @@ class LocalLLMManager:
                     "--jinja",
                     "--chat-template-file", template_path
                 ]
-            elif folder_name.lower() in ["qwen2.5"]:
+            elif "qwen2.5" in folder_name.lower():
                 template_path = pkg_resources.resource_filename("local_llms", "examples/qwen25_template.jinja")
                 running_llm_command = [
                     llama_server_path,
@@ -176,7 +176,7 @@ class LocalLLMManager:
                     "--jinja",
                     "--chat-template-file", template_path
                 ]
-            elif folder_name.lower() in ["llama"]:
+            elif "llama" in folder_name.lower():
                 template_path = pkg_resources.resource_filename("local_llms", "examples/llama31_template.jinja")
                 running_llm_command = [
                     llama_server_path,
