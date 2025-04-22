@@ -190,8 +190,8 @@ class LocalLLMManager:
                     "-ngl", "-1",
                     "--no-mmap",
                     "--mlock",
-                    "--jinja",
-                    "--chat-template-file", template_path
+                    "--jinja"
+                    # "--chat-template-file", template_path
                 ]
             else:
                 running_llm_command = [
