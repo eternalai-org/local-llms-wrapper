@@ -8,13 +8,10 @@ import random
 from pydantic import BaseModel, Field, validator, root_validator
 from typing import List, Dict, Optional, Union, Any, ClassVar
 
-MAX_CONTEXT_LENGTH = 30000
+MAX_CONTEXT_LENGTH = 32768
 
 # Precompile regex patterns for better performance
 UNICODE_BOX_PATTERN = re.compile(r'\\u25[0-9a-fA-F]{2}')
-NEWLINE_PATTERN = re.compile(r'\\n')
-BACKTICKS_START_PATTERN = re.compile(r'```(?:\\n)?(?:\w+)?')
-BACKTICKS_END_PATTERN = re.compile(r'```')
 
 # Configuration
 class Config:
@@ -56,6 +53,45 @@ class ChatCompletionRequest(BaseModel):
             raise ValueError("messages cannot be empty")
         return v
     
+    def _estimate_input_tokens(self) -> int:
+        """
+        Estimate the number of input tokens for the request.
+        """
+        messages = self.messages
+        num_tokens = 0
+        
+        # Base token count for the chat format
+        num_tokens += 3  # Every reply is primed with <|start|>assistant<|message|>
+        
+        for message in messages:
+            # Add tokens for message format
+            num_tokens += 4  # Every message follows <|im_start|>{role}<|im_sep|>
+            
+            # Count tokens in content
+            content = message.get("content", "")
+            if isinstance(content, str):
+                # Rough estimation: ~4 characters per token for English text
+                num_tokens += len(content) // 4
+            elif isinstance(content, list):
+                # For multi-modal content
+                for item in content:
+                    if isinstance(item, dict):
+                        if item.get("type") == "text":
+                            num_tokens += len(item.get("text", "")) // 4
+            
+            # Add name tokens if present
+            if message.get("name"):
+                num_tokens += len(message.get("name")) // 4 + 1
+        
+        return num_tokens
+    
+    def exceeds_token_limit(self) -> bool:
+        """
+        Check if the request is within the token limit.
+        """
+        input_tokens = self._estimate_input_tokens()
+        return input_tokens + self.max_tokens > MAX_TOKEN_LIMIT
+    
     def fix_messages(self) -> None:
         """
         Fix the messages list to ensure it starts with a system message if it exists.
@@ -66,9 +102,6 @@ class ChatCompletionRequest(BaseModel):
                 return ""
             # Apply all regex substitutions in one pass
             text = UNICODE_BOX_PATTERN.sub('', input_text)
-            text = NEWLINE_PATTERN.sub('', text)
-            text = BACKTICKS_START_PATTERN.sub('', text)
-            text = BACKTICKS_END_PATTERN.sub('', text)
             return text.strip()
         
         # Process all messages at once

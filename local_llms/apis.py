@@ -31,6 +31,7 @@ from local_llms.schema import (
     EmbeddingRequest,
     EmbeddingResponse
 )
+from local_llms.schema import MAX_TOKEN_LIMIT
 
 # Set up logging with both console and file output
 logger = logging.getLogger(__name__)
@@ -197,10 +198,11 @@ class ServiceHandler:
         Generate a response for chat completion requests, supporting both streaming and non-streaming.
         """
         port = await ServiceHandler.get_service_port()
-
-        request.fix_messages()
         if request.is_vision_request():
             raise HTTPException(status_code=400, detail="This model does not support vision-based requests")
+        if request.exceeds_token_limit():
+            raise HTTPException(status_code=400, detail=f"This model does not support requests that exceed the token limit of {MAX_TOKEN_LIMIT} tokens")
+        request.fix_messages()
         
         # Convert to dict, supporting both Pydantic v1 and v2
         request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
