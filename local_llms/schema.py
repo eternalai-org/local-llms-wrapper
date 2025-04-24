@@ -8,8 +8,7 @@ import random
 from pydantic import BaseModel, Field, validator, root_validator
 from typing import List, Dict, Optional, Union, Any, ClassVar
 
-MAX_CONTEXT_LENGTH = 32768
-
+MAX_TOKEN_LIMIT = 32768
 # Precompile regex patterns for better performance
 UNICODE_BOX_PATTERN = re.compile(r'\\u25[0-9a-fA-F]{2}')
 
