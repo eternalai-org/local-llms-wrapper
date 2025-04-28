@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 """Local LLMs - A library to manage local language models."""
-__version__ = "3.0.9"
+__version__ = "3.1.2"
 
 # Import template functions for easier access
 
@@ -61,7 +61,8 @@ required_commands = [
     ("llama-server", "LLAMA_SERVER"),
     ("tar", "TAR_COMMAND"),
     ("pigz", "PIGZ_COMMAND"),
-    ("cat", "CAT_COMMAND")
+    ("cat", "CAT_COMMAND"),
+    ("llama-mtmd-cli", "VISION_CLI")
 ]
 
 # Find all required commands and set their environment variables

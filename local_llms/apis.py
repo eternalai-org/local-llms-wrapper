@@ -259,12 +259,8 @@ class ServiceHandler:
         multimodal = app.state.service_info.get("multimodal", False)
         if not multimodal:
             raise HTTPException(status_code=400, detail="This model does not support vision-based requests")
-
-        # Retrieve configuration values
-        family = app.state.service_info["family"]
-        cli = os.getenv(family)
-        if not cli:
-            raise HTTPException(status_code=500, detail=f"CLI environment variable '{family}' not set")
+        
+        cli = os.getenv("VISION_CLI")
             
         local_text_path = app.state.service_info.get("local_text_path")
         local_projector_path = app.state.service_info.get("local_projector_path")
