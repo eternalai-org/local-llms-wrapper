@@ -76,8 +76,8 @@ class ChatCompletionRequest(BaseModel):
     messages: List[Dict[str, Any]]
     stream: Optional[bool] = False          # Whether to stream the response
     tools: Optional[List[Dict[str, Any]]] = None   # Optional list of tools to use
-    max_tokens: Optional[int] = None        # Maximum tokens in the response
-    temperature: Optional[float] = None     # Temperature for sampling
+    max_tokens: Optional[int] = 4096        # Maximum tokens in the response
+    temperature: Optional[float] = 1.0     # Temperature for sampling
     top_p: Optional[float] = None           # Top p for nucleus sampling
     frequency_penalty: Optional[float] = None  # Frequency penalty
     presence_penalty: Optional[float] = None   # Presence penalty
@@ -103,9 +103,6 @@ class ChatCompletionRequest(BaseModel):
                 return ""
             # Apply all regex substitutions in one pass
             text = UNICODE_BOX_PATTERN.sub('', input_text)
-            text = NEWLINE_PATTERN.sub('', text)
-            text = BACKTICKS_START_PATTERN.sub('', text)
-            text = BACKTICKS_END_PATTERN.sub('', text)
             return text.strip()
         
         # Process all messages at once
