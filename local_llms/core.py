@@ -157,7 +157,23 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
-                    "-ub", "8192",
+                    "--chat-template-file", template_path
+                ]
+            elif "qwen3" in folder_name.lower():
+                template_path = pkg_resources.resource_filename("local_llms", "examples/qwen3_template.jinja")
+                running_llm_command = [
+                    llama_server_path,
+                    "--model", str(local_model_path),
+                    "--port", str(llm_running_port),
+                    "--host", host,
+                    "-c", str(context_length),
+                    "-fa",
+                    "--pooling", "mean",
+                    "--no-webui",
+                    "-ngl", "-1",
+                    "--no-mmap",
+                    "--mlock",
+                    "--jinja",
                     "--chat-template-file", template_path
                 ]
             elif "qwen2.5" in folder_name.lower():
@@ -175,7 +191,6 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
-                    "-ub", "8192",
                     "--chat-template-file", template_path
                 ]
             elif "llama" in folder_name.lower():
@@ -193,7 +208,6 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
-                    "-ub", "8192",
                     "--chat-template-file", template_path
                 ]
             else:
@@ -208,8 +222,7 @@ class LocalLLMManager:
                     "-ngl", "-1",
                     "--no-mmap",
                     "--mlock",
-                    "--jinja",
-                    "-ub", "8192",
+                    "--jinja",  
                     "--no-webui"
                 ]
             logger.info(f"Starting process: {' '.join(running_llm_command)}")
