@@ -30,7 +30,8 @@ from local_llms.schema import (
     ChatCompletionRequest, 
     ChatCompletionResponse,
     EmbeddingRequest,
-    EmbeddingResponse
+    EmbeddingResponse,
+    _extract_reasoning_content
 )
 
 # Set up logging with both console and file output
@@ -244,9 +245,24 @@ class ServiceHandler:
         
         # If response is already in OpenAI format, return it
         if "choices" in response_data and "object" in response_data:
+            # Parse <think> tags if they exist
+            for choice in response_data.get("choices", []):
+                if "message" in choice and "content" in choice["message"] and choice["message"]["content"]:
+                    content = choice["message"]["content"]
+                    updated_content, reasoning_content = _extract_reasoning_content(content)
+                    choice["message"]["content"] = updated_content
+                    if reasoning_content:
+                        choice["message"]["reasoning_content"] = reasoning_content
             return response_data
         
         # Otherwise, format it
+        if "content" in response_data and response_data["content"]:
+            content = response_data["content"]
+            updated_content, reasoning_content = _extract_reasoning_content(content)
+            response_data["content"] = updated_content
+            if reasoning_content:
+                response_data["reasoning_content"] = reasoning_content
+        
         response = ChatCompletionResponse.create_from_dict(response_data, request.model)
         return response.model_dump() if hasattr(response, "model_dump") else response.dict()
 
@@ -470,36 +486,6 @@ class ServiceHandler:
             yield f"data: {{\"error\":{{\"message\":\"{str(e)}\",\"code\":500}}}}\n\n"
 
     @staticmethod
-    def _extract_reasoning_content(content: str) -> tuple[str, str]:
-        """
-        Extract reasoning content from <think> tags in the message content.
-        
-        Args:
-            content: The message content that may contain <think> tags
-            
-        Returns:
-            tuple: (updated_content, reasoning_content)
-                updated_content: The content with <think> tags removed
-                reasoning_content: The content inside <think> tags
-        """
-        if not content or "<think>" not in content:
-            return content, ""
-            
-        # Extract reasoning content from <think> tags
-        reasoning_content = ""
-        updated_content = content
-        
-        think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
-        matches = think_pattern.findall(content)
-        
-        if matches:
-            reasoning_content = "\n".join(matches)
-            # Remove <think> tags from the content
-            updated_content = think_pattern.sub('', content).strip()
-            
-        return updated_content, reasoning_content
-
-    @staticmethod
     async def _fake_stream_with_tools(formatted_response: dict, model: str):
         """
         Generate a fake streaming response for tool-based chat completions.
@@ -558,7 +544,7 @@ class ServiceHandler:
             # For content responses
             elif message.get("content"):
                 content = message.get("content", "")
-                updated_content, reasoning_content = ServiceHandler._extract_reasoning_content(content)
+                updated_content, reasoning_content = _extract_reasoning_content(content)
                 delta["content"] = updated_content
                 delta["reasoning_content"] = reasoning_content
             else:

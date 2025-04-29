@@ -5,6 +5,7 @@ Schema definitions for API requests and responses following OpenAI's API standar
 import time
 import re
 import random
+import os
 from pydantic import BaseModel, Field, validator, root_validator
 from typing import List, Dict, Optional, Union, Any, ClassVar
 
@@ -29,6 +30,42 @@ class Config:
     MAX_RETRIES = 3                     # Maximum number of retries for HTTP requests
     POOL_CONNECTIONS = 100              # Maximum number of connections in the pool
     POOL_KEEPALIVE = 20                 # Keep connections alive for 20 seconds
+
+# Service configuration
+SERVICE_PORT = int(os.environ.get("SERVICE_PORT", 8000))      # Port for the service
+SERVICE_START_TIMEOUT = int(os.environ.get("SERVICE_START_TIMEOUT", 60))  # Timeout for service start
+IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT", 300))       # Timeout for idle service (5 minutes)
+UNLOAD_CHECK_INTERVAL = int(os.environ.get("UNLOAD_CHECK_INTERVAL", 60))  # Interval for checking idle status (1 minute)
+
+# Helper functions
+def _extract_reasoning_content(content: str) -> tuple[str, str]:
+    """
+    Extract reasoning content from <think> tags in the message content.
+    
+    Args:
+        content: The message content that may contain <think> tags
+        
+    Returns:
+        tuple: (updated_content, reasoning_content)
+            updated_content: The content with <think> tags removed
+            reasoning_content: The content inside <think> tags
+    """
+    if not content or "<think>" not in content:
+        return content, ""
+        
+    # Extract reasoning content from <think> tags
+    reasoning_content = ""
+    updated_content = content
+    
+    think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+    matches = think_pattern.findall(content)
+    
+    if matches:
+        reasoning_content = "\n".join(matches)
+        # Remove <think> tags from the content
+        updated_content = think_pattern.sub('', content).strip()
+        
+    return updated_content, reasoning_content
 
 # Chat completion models
 class ChatCompletionRequest(BaseModel):
@@ -152,7 +189,17 @@ class ChatCompletionResponse(BaseModel):
     def create_from_content(cls, content: Any, model: str):
         """Create a standard response from content."""
         timestamp = int(time.time())
-        message = {"role": "assistant", "content": content if isinstance(content, str) else str(content)}
+        # Handle case where content is a string but might contain <think> tags
+        if isinstance(content, str) and "<think>" in content:
+            updated_content, reasoning_content = _extract_reasoning_content(content)
+            message = {
+                "role": "assistant", 
+                "content": updated_content
+            }
+            if reasoning_content:
+                message["reasoning_content"] = reasoning_content
+        else:
+            message = {"role": "assistant", "content": content if isinstance(content, str) else str(content)}
             
         return cls(
             id=f"chatcmpl-{timestamp}{random.randint(10000, 99999)}",
@@ -172,6 +219,16 @@ class ChatCompletionResponse(BaseModel):
     def create_from_dict(cls, data: Dict[str, Any], model: str):
         """Create a standard response from dictionary data."""
         timestamp = int(time.time())
+        
+        message = {
+            "role": "assistant", 
+            "content": data.get("content", "")
+        }
+        
+        # Add reasoning_content if it exists
+        if "reasoning_content" in data:
+            message["reasoning_content"] = data["reasoning_content"]
+            
         return cls(
             id=data.get("id", f"chatcmpl-{timestamp}{random.randint(10000, 99999)}"),
             created=data.get("created", timestamp),
@@ -179,7 +236,7 @@ class ChatCompletionResponse(BaseModel):
             choices=[
                 ChatCompletionResponseChoice(
                     index=0,
-                    message={"role": "assistant", "content": data.get("content", "")},
+                    message=message,
                     finish_reason=data.get("finish_reason", "stop")
                 )
             ],
