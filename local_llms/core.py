@@ -157,6 +157,7 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
+                    "-ub", "8192",
                     "--chat-template-file", template_path
                 ]
             elif "qwen2.5" in folder_name.lower():
@@ -174,6 +175,7 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
+                    "-ub", "8192",
                     "--chat-template-file", template_path
                 ]
             elif "llama" in folder_name.lower():
@@ -191,6 +193,7 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
+                    "-ub", "8192",
                     "--chat-template-file", template_path
                 ]
             else:
@@ -206,6 +209,7 @@ class LocalLLMManager:
                     "--no-mmap",
                     "--mlock",
                     "--jinja",
+                    "-ub", "8192",
                     "--no-webui"
                 ]
             logger.info(f"Starting process: {' '.join(running_llm_command)}")
