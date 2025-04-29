@@ -189,8 +189,7 @@ class LocalLLMManager:
                     "-ngl", "-1",
                     "--no-mmap",
                     "--mlock",
-                    "--jinja",
-                    "--reasoning-format", "deepseek"
+                    "--jinja"
                 ]
             elif "llama" in folder_name.lower():
                 template_path = pkg_resources.resource_filename("local_llms", "examples/llama31_template.jinja")

@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from typing import Dict, Optional, Union, Any, Callable, Tuple, List
 from functools import lru_cache
+import re
 
 # Import schemas from schema.py
 from local_llms.schema import (
@@ -469,6 +470,36 @@ class ServiceHandler:
             yield f"data: {{\"error\":{{\"message\":\"{str(e)}\",\"code\":500}}}}\n\n"
 
     @staticmethod
+    def _extract_reasoning_content(content: str) -> tuple[str, str]:
+        """
+        Extract reasoning content from <think> tags in the message content.
+        
+        Args:
+            content: The message content that may contain <think> tags
+            
+        Returns:
+            tuple: (updated_content, reasoning_content)
+                updated_content: The content with <think> tags removed
+                reasoning_content: The content inside <think> tags
+        """
+        if not content or "<think>" not in content:
+            return content, ""
+            
+        # Extract reasoning content from <think> tags
+        reasoning_content = ""
+        updated_content = content
+        
+        think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+        matches = think_pattern.findall(content)
+        
+        if matches:
+            reasoning_content = "\n".join(matches)
+            # Remove <think> tags from the content
+            updated_content = think_pattern.sub('', content).strip()
+            
+        return updated_content, reasoning_content
+
+    @staticmethod
     async def _fake_stream_with_tools(formatted_response: dict, model: str):
         """
         Generate a fake streaming response for tool-based chat completions.
@@ -526,8 +557,10 @@ class ServiceHandler:
                 delta["reasoning_content"] = ""
             # For content responses
             elif message.get("content"):
-                delta["content"] = message["content"]
-                delta["reasoning_content"] = ""
+                content = message.get("content", "")
+                updated_content, reasoning_content = ServiceHandler._extract_reasoning_content(content)
+                delta["content"] = updated_content
+                delta["reasoning_content"] = reasoning_content
             else:
                 # Empty content/null case
                 delta["reasoning_content"] = ""
