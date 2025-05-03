@@ -177,6 +177,7 @@ class LocalLLMManager:
                     "--chat-template-file", template_path
                 ]
             elif "qwen3" in folder_name.lower():
+                template_path = pkg_resources.resource_filename("local_llms", "examples/qwen25_template.jinja")
                 running_llm_command = [
                     llama_server_path,
                     "--model", str(local_model_path),
@@ -189,7 +190,8 @@ class LocalLLMManager:
                     "-ngl", "-1",
                     "--no-mmap",
                     "--mlock",
-                    "--jinja"
+                    "--jinja",
+                    "--chat-template-file", template_path
                 ]
             elif "llama" in folder_name.lower():
                 template_path = pkg_resources.resource_filename("local_llms", "examples/llama31_template.jinja")
