@@ -278,7 +278,7 @@ class ServiceHandler:
         Supports a single message with exactly one text prompt and one image (base64 or URL).
         """
         cli = os.getenv("LLAMA_MTMD_CLI")
-        pattern = r"image decoded \(batch \d+/\d+\) in \d+ ms"
+        pattern = "loading model:"
             
         local_text_path = app.state.service_info.get("local_text_path")
         local_projector_path = app.state.service_info.get("local_projector_path")
@@ -326,8 +326,7 @@ class ServiceHandler:
                 "--model", local_text_path,
                 "--mmproj", local_projector_path,
                 "--image", image_path,
-                "--prompt", text,
-                "--log-disable"
+                "--prompt", text
             ]
 
             proc = await asyncio.create_subprocess_exec(
@@ -342,16 +341,11 @@ class ServiceHandler:
                 raise HTTPException(status_code=500, detail=f"Command failed: {error_message}")
         
             content = stdout.decode().strip()
-            print("CONTENT: ", content)
         
-            start = content.find(pattern)
-            end_pattern = content.find("\n", start)
-            start_content = end_pattern + 1
-            print("start_content: ", start_content)
-            end_content = content.find("llama_perf_context_print") - 1
-            print("end_content: ", end_content)
-            content = content[start_content:end_content]
-            print("content: ", content)
+        
+            start_pattern = content.find(pattern)
+            start_content = content.find("\n", start_pattern) + 1 
+            content = content[start_content:]
             # Create formatted response
             response = ChatCompletionResponse.create_from_content(content, request.model)
             return response.model_dump() if hasattr(response, "model_dump") else response.dict()
