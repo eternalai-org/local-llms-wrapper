@@ -278,7 +278,7 @@ class ServiceHandler:
         Supports a single message with exactly one text prompt and one image (base64 or URL).
         """
         cli = os.getenv("LLAMA_MTMD_CLI")
-        pattern = "image decoded"
+        pattern = r"image decoded \(batch \d+/\d+\) in \d+ ms"
             
         local_text_path = app.state.service_info.get("local_text_path")
         local_projector_path = app.state.service_info.get("local_projector_path")
@@ -345,7 +345,9 @@ class ServiceHandler:
             start = content.find(pattern)
             end_pattern = content.find("\n", start)
             start_content = end_pattern + 1
+            print("start_content: ", start_content)
             end_content = content.find("llama_perf_context_print") - 1
+            print("end_content: ", end_content)
             content = content[start_content:end_content]
             print("content: ", content)
             # Create formatted response
