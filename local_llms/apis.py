@@ -344,8 +344,8 @@ class ServiceHandler:
         
         
             start_pattern = content.find(pattern)
-            start_content = content.find("\n", start_pattern) + 1 
-            content = content[start_content:]
+            start_content = content.find("\n", start_pattern)
+            content = content[start_content:].strip()
             # Create formatted response
             response = ChatCompletionResponse.create_from_content(content, request.model)
             return response.model_dump() if hasattr(response, "model_dump") else response.dict()
@@ -380,21 +380,7 @@ class ServiceHandler:
                 logger.error(f"Failed to process base64 image: {str(e)}")
                 raise HTTPException(status_code=400, detail="Invalid base64 image data")
         else:
-            # Regular URL
-            try:
-                async with httpx.AsyncClient(timeout=Config.HTTP_TIMEOUT) as client:
-                    response = await client.get(image_url)
-                    if response.status_code != 200:
-                        raise HTTPException(status_code=400, detail=f"Failed to download image: HTTP {response.status_code}")
-                    data = response.content
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-                        temp_file.write(data)
-                        return temp_file.name
-            except httpx.TimeoutException:
-                raise HTTPException(status_code=504, detail="Timeout while downloading image")
-            except Exception as e:
-                logger.error(f"Failed to download image: {str(e)}")
-                raise HTTPException(status_code=400, detail=f"Failed to download image: {str(e)}")
+            raise HTTPException(status_code=400, detail="Only base64 image data has been supported for now")
     
     @staticmethod
     async def generate_embeddings_response(request: EmbeddingRequest):
