@@ -12,7 +12,7 @@ This guide explains how to deploy your local large language model to the Vibe pl
 Install the `local-llms` tool required for uploading models to Lighthouse:
 
 ```bash
-bash install.sh
+bash mac.sh
 ```
 
 ## Step 2: Activate the Virtual Environment
