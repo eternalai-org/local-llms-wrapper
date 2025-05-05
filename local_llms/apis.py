@@ -285,19 +285,17 @@ class ServiceHandler:
         
         if not local_text_path or not local_projector_path:
             raise HTTPException(status_code=500, detail="Model paths not properly configured")
-
-        # get final user prompt with image
-        message = request.messages[-1]
-        if message["role"] != "user":
-            raise HTTPException(status_code=400, detail="Vision-based requests must contain a user message")
         
-        content = message["content"]
+        # get system prompt and final user prompt with image
+        system_prompt = request.messages[0].get("content", "")
+        user_content = request.messages[-1].get("content", "")   
+
         text = None
         image_url = None
         image_path = None
 
         # Extract exactly one text and one image_url from the content list
-        for item in content:
+        for item in user_content:
             if not isinstance(item, dict):
                 raise HTTPException(status_code=400, detail="Content items must be dictionaries")
             item_type = item.get("type")
@@ -319,6 +317,7 @@ class ServiceHandler:
         try:
             # Handle the image_url: base64 or URL
             image_path = await ServiceHandler._process_image(image_url)
+            p = system_prompt + "USER: <image>\n" + text + " ASSISTANT:"
             
             # Construct and execute the command
             command = [
@@ -326,7 +325,7 @@ class ServiceHandler:
                 "--model", local_text_path,
                 "--mmproj", local_projector_path,
                 "--image", image_path,
-                "--prompt", text
+                "--prompt", p
             ]
 
             proc = await asyncio.create_subprocess_exec(
