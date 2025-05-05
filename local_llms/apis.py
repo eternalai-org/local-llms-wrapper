@@ -286,15 +286,12 @@ class ServiceHandler:
         if not local_text_path or not local_projector_path:
             raise HTTPException(status_code=500, detail="Model paths not properly configured")
 
-        # Enforce a single message
-        if len(request.messages) != 1:
-            raise HTTPException(status_code=400, detail="Vision-based requests must contain exactly one message")
-
-        # Process the content of the single message
-        content = request.messages[0].content
-        if not isinstance(content, list):
-            raise HTTPException(status_code=400, detail="Vision content must be a list")
-
+        # get final user prompt with image
+        message = request.messages[-1]
+        if message["role"] != "user":
+            raise HTTPException(status_code=400, detail="Vision-based requests must contain a user message")
+        
+        content = message["content"]
         text = None
         image_url = None
         image_path = None
@@ -314,7 +311,7 @@ class ServiceHandler:
                 image_url = item.get("image_url", {}).get("url")
             else:
                 raise HTTPException(status_code=400, detail=f"Invalid content type '{item_type}' in vision-based request")
-
+            
         # Validate that both text and image_url are present
         if text is None or image_url is None:
             raise HTTPException(status_code=400, detail="Vision-based requests must include one text prompt and one image")
