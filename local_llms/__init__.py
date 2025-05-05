@@ -61,7 +61,8 @@ required_commands = [
     ("llama-server", "LLAMA_SERVER"),
     ("tar", "TAR_COMMAND"),
     ("pigz", "PIGZ_COMMAND"),
-    ("cat", "CAT_COMMAND")
+    ("cat", "CAT_COMMAND"),
+    ("llama-mtmd-cli", "LLAMA_MTMD_CLI")
 ]
 
 # Find all required commands and set their environment variables

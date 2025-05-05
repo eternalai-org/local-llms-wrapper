@@ -10,7 +10,7 @@ import httpx
 import asyncio
 import base64
 import tempfile
-import random
+import re
 import time
 import json
 import uuid
@@ -202,8 +202,13 @@ class ServiceHandler:
 
         request.fix_messages()
         if request.is_vision_request():
-            raise HTTPException(status_code=400, detail="This model does not support vision-based requests")
-        
+            if request.stream:
+                raise HTTPException(status_code=400, detail="Vision-based requests has not been supported for streaming yet")
+            if request.tools:
+                raise HTTPException(status_code=400, detail="Vision-based requests with tools has not been supported yet")
+            else:
+                return await ServiceHandler.generate_vision_response(request)
+            
         # Convert to dict, supporting both Pydantic v1 and v2
         request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
 
@@ -272,16 +277,8 @@ class ServiceHandler:
         Generate a response for vision-based chat completion requests.
         Supports a single message with exactly one text prompt and one image (base64 or URL).
         """
-        # Check if the service supports multimodal inputs
-        multimodal = app.state.service_info.get("multimodal", False)
-        if not multimodal:
-            raise HTTPException(status_code=400, detail="This model does not support vision-based requests")
-
-        # Retrieve configuration values
-        family = app.state.service_info["family"]
-        cli = os.getenv(family)
-        if not cli:
-            raise HTTPException(status_code=500, detail=f"CLI environment variable '{family}' not set")
+        cli = os.getenv("LLAMA_MTMD_CLI")
+        pattern = "image decoded"
             
         local_text_path = app.state.service_info.get("local_text_path")
         local_projector_path = app.state.service_info.get("local_projector_path")
@@ -345,9 +342,17 @@ class ServiceHandler:
             if proc.returncode != 0:
                 error_message = stderr.decode().strip() if stderr else "Unknown error"
                 raise HTTPException(status_code=500, detail=f"Command failed: {error_message}")
-
+        
+            content = stdout.decode().strip()
+        
+            start = content.find(pattern)
+            end_pattern = content.find("\n", start)
+            start_content = end_pattern + 1
+            end_content = content.find("llama_perf_context_print") - 1
+            content = content[start_content:end_content]
+            print("content: ", content)
             # Create formatted response
-            response = ChatCompletionResponse.create_from_content(stdout.decode().strip(), request.model)
+            response = ChatCompletionResponse.create_from_content(content, request.model)
             return response.model_dump() if hasattr(response, "model_dump") else response.dict()
             
         except HTTPException:
