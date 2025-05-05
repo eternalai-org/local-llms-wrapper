@@ -341,6 +341,7 @@ class ServiceHandler:
                 raise HTTPException(status_code=500, detail=f"Command failed: {error_message}")
         
             content = stdout.decode().strip()
+            print("CONTENT: ", content)
         
             start = content.find(pattern)
             end_pattern = content.find("\n", start)
