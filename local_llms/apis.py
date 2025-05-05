@@ -326,7 +326,8 @@ class ServiceHandler:
                 "--model", local_text_path,
                 "--mmproj", local_projector_path,
                 "--image", image_path,
-                "--prompt", text
+                "--prompt", text,
+                "--log-disable"
             ]
 
             proc = await asyncio.create_subprocess_exec(
