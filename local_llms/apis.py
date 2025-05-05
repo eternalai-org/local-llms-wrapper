@@ -207,6 +207,8 @@ class ServiceHandler:
             if request.tools:
                 raise HTTPException(status_code=400, detail="Vision-based requests with tools has not been supported yet")
             else:
+                logger.info("Unloading llama-server for vision-based requests")
+                await ServiceHandler.kill_llama_server()
                 return await ServiceHandler.generate_vision_response(request)
             
         # Convert to dict, supporting both Pydantic v1 and v2
