@@ -109,9 +109,6 @@ class ChatCompletionRequest(BaseModel):
             self.messages = [system_messages[0]] + non_system_messages
         else:
             self.messages = non_system_messages
-
-        print("MESSAGES", self.messages)
-
     
     def is_vision_request(self) -> bool:
         """
@@ -186,12 +183,15 @@ class ChatCompletionResponse(BaseModel):
     def create_from_dict(cls, data: Dict[str, Any], model: str):
         """Create a standard response from dictionary data."""
         timestamp = int(time.time())
-
-        print("DATA", data)
+        content = ""
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except Exception as e:
+            print("ERROR", e)
         
         message = {
             "role": "assistant", 
-            "content": data.get("content", "")
+            "content": content
         }
             
         return cls(

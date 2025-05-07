@@ -11,7 +11,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 """Local LLMs - A library to manage local language models."""
-__version__ = "3.1.4"
+__version__ = "3.1.5"
 
 # Import template functions for easier access
 
