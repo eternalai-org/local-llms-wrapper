@@ -143,68 +143,25 @@ class ChatCompletionRequest(BaseModel):
                 return True
         return False
 
-class ChatCompletionResponseChoice(BaseModel):
-    """Model for a single choice in a chat completion response."""
-    index: int
-    message: Dict[str, Any]
-    finish_reason: str
-
 class ChatCompletionResponse(BaseModel):
     """Model for chat completion responses following OpenAI's schema."""
     id: str
     object: str = "chat.completion"
     created: int
     model: str
-    choices: List[ChatCompletionResponseChoice]
     usage: Dict[str, int]
-    
-    @classmethod
-    def create_from_content(cls, content: Any, model: str):
-        """Create a standard response from content."""
-        timestamp = int(time.time())
-        # Create a simple message with content
-        message = {"role": "assistant", "content": content if isinstance(content, str) else str(content)}
-            
-        return cls(
-            id=f"chatcmpl-{timestamp}{random.randint(10000, 99999)}",
-            created=timestamp,
-            model=model,
-            choices=[
-                ChatCompletionResponseChoice(
-                    index=0,
-                    message=message,
-                    finish_reason="stop"
-                )
-            ],
-            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        )
 
     @classmethod
     def create_from_dict(cls, data: Dict[str, Any], model: str):
         """Create a standard response from dictionary data."""
         timestamp = int(time.time())
-        content = ""
-        try:
-            content = data["choices"][0]["message"]["content"]
-        except Exception as e:
-            print("ERROR", e)
-        
-        message = {
-            "role": "assistant", 
-            "content": content
-        }
+        choices = data.get("choices", [])
             
         return cls(
             id=data.get("id", f"chatcmpl-{timestamp}{random.randint(10000, 99999)}"),
             created=data.get("created", timestamp),
             model=model,
-            choices=[
-                ChatCompletionResponseChoice(
-                    index=0,
-                    message=message,
-                    finish_reason=data.get("finish_reason", "stop")
-                )
-            ],
+            choices=choices,
             usage=data.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
         )
 
