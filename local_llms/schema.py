@@ -110,6 +110,8 @@ class ChatCompletionRequest(BaseModel):
         else:
             self.messages = non_system_messages
 
+        print("MESSAGES", self.messages)
+
     
     def is_vision_request(self) -> bool:
         """
