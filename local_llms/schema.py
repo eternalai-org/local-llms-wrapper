@@ -186,6 +186,8 @@ class ChatCompletionResponse(BaseModel):
     def create_from_dict(cls, data: Dict[str, Any], model: str):
         """Create a standard response from dictionary data."""
         timestamp = int(time.time())
+
+        print("DATA", data)
         
         message = {
             "role": "assistant", 
