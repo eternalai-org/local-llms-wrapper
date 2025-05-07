@@ -37,36 +37,6 @@ SERVICE_START_TIMEOUT = int(os.environ.get("SERVICE_START_TIMEOUT", 60))  # Time
 IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT", 300))       # Timeout for idle service (5 minutes)
 UNLOAD_CHECK_INTERVAL = int(os.environ.get("UNLOAD_CHECK_INTERVAL", 60))  # Interval for checking idle status (1 minute)
 
-# Helper functions
-def _extract_reasoning_content(content: str) -> tuple[str, str]:
-    """
-    Extract reasoning content from <think> tags in the message content.
-    
-    Args:
-        content: The message content that may contain <think> tags
-        
-    Returns:
-        tuple: (updated_content, reasoning_content)
-            updated_content: The content with <think> tags removed
-            reasoning_content: The content inside <think> tags
-    """
-    if not content or "<think>" not in content:
-        return content, ""
-        
-    # Extract reasoning content from <think> tags
-    reasoning_content = ""
-    updated_content = content
-    
-    think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
-    matches = think_pattern.findall(content)
-    
-    if matches:
-        reasoning_content = "\n".join(matches)
-        # Remove <think> tags from the content
-        updated_content = think_pattern.sub('', content).strip()
-        
-    return updated_content, reasoning_content
-
 # Chat completion models
 class ChatCompletionRequest(BaseModel):
     """
@@ -83,6 +53,7 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = None   # Presence penalty
     stop: Optional[Union[str, List[str]]] = None  # Stop sequences
     seed: Optional[int] = 0                 # Seed for reproducibility
+    enable_thinking: Optional[bool] = False  # Whether to enable thinking
     
     @validator("messages")
     def validate_messages(cls, v):
@@ -129,10 +100,16 @@ class ChatCompletionRequest(BaseModel):
                 system_messages.append(message)
             else:
                 non_system_messages.append(message)
-        
+        if not self.enable_thinking:
+            final_message = non_system_messages[-1]
+            final_message["content"] = final_message["content"] + " /no_think"
+            non_system_messages[-1] = final_message
         # Reorder messages to ensure system message comes first if it exists
         if system_messages:
             self.messages = [system_messages[0]] + non_system_messages
+        else:
+            self.messages = non_system_messages
+
     
     def is_vision_request(self) -> bool:
         """
@@ -186,17 +163,8 @@ class ChatCompletionResponse(BaseModel):
     def create_from_content(cls, content: Any, model: str):
         """Create a standard response from content."""
         timestamp = int(time.time())
-        # Handle case where content is a string but might contain <think> tags
-        if isinstance(content, str) and "<think>" in content:
-            updated_content, reasoning_content = _extract_reasoning_content(content)
-            message = {
-                "role": "assistant", 
-                "content": updated_content
-            }
-            if reasoning_content:
-                message["reasoning_content"] = reasoning_content
-        else:
-            message = {"role": "assistant", "content": content if isinstance(content, str) else str(content)}
+        # Create a simple message with content
+        message = {"role": "assistant", "content": content if isinstance(content, str) else str(content)}
             
         return cls(
             id=f"chatcmpl-{timestamp}{random.randint(10000, 99999)}",
@@ -221,10 +189,6 @@ class ChatCompletionResponse(BaseModel):
             "role": "assistant", 
             "content": data.get("content", "")
         }
-        
-        # Add reasoning_content if it exists
-        if "reasoning_content" in data:
-            message["reasoning_content"] = data["reasoning_content"]
             
         return cls(
             id=data.get("id", f"chatcmpl-{timestamp}{random.randint(10000, 99999)}"),

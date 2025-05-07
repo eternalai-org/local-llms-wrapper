@@ -30,8 +30,7 @@ from local_llms.schema import (
     ChatCompletionRequest, 
     ChatCompletionResponse,
     EmbeddingRequest,
-    EmbeddingResponse,
-    _extract_reasoning_content
+    EmbeddingResponse
 )
 
 # Set up logging with both console and file output
@@ -243,33 +242,7 @@ class ServiceHandler:
 
         # Make a non-streaming API call
         response_data = await ServiceHandler._make_api_call(port, "/v1/chat/completions", request_dict)
-        
-        # Format the response according to OpenAI's schema
-        if not isinstance(response_data, dict):
-            # If the response is a string or other non-dict type, wrap it
-            response = ChatCompletionResponse.create_from_content(response_data, request.model)
-            return response.model_dump() if hasattr(response, "model_dump") else response.dict()
-        
-        # If response is already in OpenAI format, return it
-        if "choices" in response_data and "object" in response_data:
-            # Parse <think> tags if they exist
-            for choice in response_data.get("choices", []):
-                if "message" in choice and "content" in choice["message"] and choice["message"]["content"]:
-                    content = choice["message"]["content"]
-                    updated_content, reasoning_content = _extract_reasoning_content(content)
-                    choice["message"]["content"] = updated_content
-                    if reasoning_content:
-                        choice["message"]["reasoning_content"] = reasoning_content
-            return response_data
-        
-        # Otherwise, format it
-        if "content" in response_data and response_data["content"]:
-            content = response_data["content"]
-            updated_content, reasoning_content = _extract_reasoning_content(content)
-            response_data["content"] = updated_content
-            if reasoning_content:
-                response_data["reasoning_content"] = reasoning_content
-        
+        assert isinstance(response_data, dict), "Response data must be a dictionary"
         response = ChatCompletionResponse.create_from_dict(response_data, request.model)
         return response.model_dump() if hasattr(response, "model_dump") else response.dict()
 
@@ -527,16 +500,13 @@ class ServiceHandler:
                     updated_tool_calls.append(tool_call)
                     updated_tool_calls[idx]["index"] = str(idx)
                 delta["tool_calls"] = updated_tool_calls
-                delta["reasoning_content"] = ""
             # For content responses
             elif message.get("content"):
                 content = message.get("content", "")
-                updated_content, reasoning_content = _extract_reasoning_content(content)
-                delta["content"] = updated_content
-                delta["reasoning_content"] = reasoning_content
+                delta["content"] = content
             else:
                 # Empty content/null case
-                delta["reasoning_content"] = ""
+                delta["content"] = ""
                 
             if delta:  # Only include choices with content
                 content_choices.append({
