@@ -150,6 +150,7 @@ class ChatCompletionResponse(BaseModel):
     created: int
     model: str
     usage: Dict[str, int]
+    choices: Any
 
     @classmethod
     def create_from_dict(cls, data: Dict[str, Any], model: str):
