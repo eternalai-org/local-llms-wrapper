@@ -40,16 +40,7 @@ class VisionContentItem(BaseModel):
     type: Literal["text", "image_url"] = Field(..., description="Type of content")
     text: Optional[str] = Field(None, description="Text content if type is text")
     image_url: Optional[ImageUrl] = Field(None, description="Image URL if type is image_url")
-
-    @root_validator
-    def validate_content(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate that the content matches the type."""
-        content_type = values.get("type")
-        if content_type == "text" and not values.get("text"):
-            raise ValueError("Text content is required for type 'text'")
-        elif content_type == "image_url" and not values.get("image_url"):
-            raise ValueError("Image URL is required for type 'image_url'")
-        return values
+        
 
 class FunctionCall(BaseModel):
     """
