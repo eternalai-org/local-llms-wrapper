@@ -5,17 +5,12 @@ Schema definitions for API requests and responses following OpenAI's API standar
 import time
 import re
 import random
-import os
-from pydantic import BaseModel, Field, validator, root_validator
+from typing_extensions import Literal
+from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Optional, Union, Any, ClassVar
-
-MAX_CONTEXT_LENGTH = 30000
 
 # Precompile regex patterns for better performance
 UNICODE_BOX_PATTERN = re.compile(r'\\u25[0-9a-fA-F]{2}')
-NEWLINE_PATTERN = re.compile(r'\\n')
-BACKTICKS_START_PATTERN = re.compile(r'```(?:\\n)?(?:\w+)?')
-BACKTICKS_END_PATTERN = re.compile(r'```')
 
 # Configuration
 class Config:
@@ -25,44 +20,115 @@ class Config:
     TEXT_MODEL = "gpt-4-turbo"          # Default model for text-based chat completions
     VISION_MODEL = "gpt-4-vision-preview"  # Model used for vision-based requests
     EMBEDDING_MODEL = "text-embedding-ada-002"  # Model used for generating embeddings
-    HTTP_TIMEOUT = 600.0                 # Default timeout for HTTP requests in seconds
-    CACHE_TTL = 300                     # Cache time-to-live in seconds (5 minutes)
-    MAX_RETRIES = 3                     # Maximum number of retries for HTTP requests
-    POOL_CONNECTIONS = 100              # Maximum number of connections in the pool
-    POOL_KEEPALIVE = 20                 # Keep connections alive for 20 seconds
 
-# Service configuration
-SERVICE_PORT = int(os.environ.get("SERVICE_PORT", 8000))      # Port for the service
-SERVICE_START_TIMEOUT = int(os.environ.get("SERVICE_START_TIMEOUT", 60))  # Timeout for service start
-IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT", 300))       # Timeout for idle service (5 minutes)
-UNLOAD_CHECK_INTERVAL = int(os.environ.get("UNLOAD_CHECK_INTERVAL", 60))  # Interval for checking idle status (1 minute)
+# Common models used in both streaming and non-streaming contexts
+class ImageUrl(BaseModel):
+    """
+    Represents an image URL in a message.
+    """
+    url: str
 
-# Chat completion models
-class ChatCompletionRequest(BaseModel):
+class VisionContentItem(BaseModel):
     """
-    Model for chat completion requests, matching OpenAI's API schema.
+    Represents a single content item in a message (text or image).
     """
-    model: str = Config.TEXT_MODEL          # Model to use, defaults to text model
-    messages: List[Dict[str, Any]]
-    stream: Optional[bool] = False          # Whether to stream the response
-    tools: Optional[List[Dict[str, Any]]] = None   # Optional list of tools to use
-    max_tokens: Optional[int] = 4096        # Maximum tokens in the response
-    temperature: Optional[float] = 1.0     # Temperature for sampling
-    top_p: Optional[float] = None           # Top p for nucleus sampling
-    frequency_penalty: Optional[float] = None  # Frequency penalty
-    presence_penalty: Optional[float] = None   # Presence penalty
-    stop: Optional[Union[str, List[str]]] = None  # Stop sequences
-    seed: Optional[int] = 0                 # Seed for reproducibility
-    enable_thinking: Optional[bool] = False  # Whether to enable thinking
-    
+    type: str
+    text: Optional[str] = None
+    image_url: Optional[ImageUrl] = None
+
+class FunctionCall(BaseModel):
+    """
+    Represents a function call in a message.
+    """
+    arguments: str
+    name: str
+
+class ChatCompletionMessageToolCall(BaseModel):
+    """
+    Represents a tool call in a message.
+    """
+    id: str
+    function: FunctionCall
+    type: Literal["function"]
+
+class Message(BaseModel):
+    """
+    Represents a message in a chat completion.
+    """
+    content: Union[str, List[VisionContentItem]]
+    refusal: Optional[str] = None
+    role: Literal["system", "user", "assistant", "tool"]
+    function_call: Optional[FunctionCall] = None
+    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+
+# Common request base for both streaming and non-streaming
+class ChatCompletionRequestBase(BaseModel):
+    """
+    Base model for chat completion requests.
+    """
+    model: str = Config.TEXT_MODEL
+    messages: List[Message]
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = 0.7
+    top_p: Optional[float] = 1.0
+    frequency_penalty: Optional[float] = 0.0
+    presence_penalty: Optional[float] = 0.0
+    stop: Optional[List[str]] = None
+    n: Optional[int] = 1
+    response_format: Optional[Dict[str, str]] = None
+    seed: Optional[int] = None
+    user: Optional[str] = None
+    enable_thinking: Optional[bool] = False
+
     @validator("messages")
-    def validate_messages(cls, v):
+    def check_messages_not_empty(cls, v):
         """
-        Validate that messages list is not empty.
-        """    
+        Ensure that the messages list is not empty and validate message structure.
+        """
         if not v:
             raise ValueError("messages cannot be empty")
+        
+        # Validate message history length
+        if len(v) > 100:  # OpenAI's limit is typically around 100 messages
+            raise ValueError("message history too long")
+            
+        # Validate message roles
+        valid_roles = {"user", "assistant", "system", "tool"}
+        for msg in v:
+            if msg.role not in valid_roles:
+                raise ValueError(f"invalid role: {msg.role}")
+                
         return v
+
+    @validator("temperature")
+    def check_temperature(cls, v):
+        """
+        Validate temperature is between 0 and 2.
+        """
+        if v is not None and (v < 0 or v > 2):
+            raise ValueError("temperature must be between 0 and 2")
+        return v
+
+    def is_vision_request(self) -> bool:
+        """
+        Check if the request includes image content, indicating a vision-based request.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        for message in self.messages:
+            content = message.content
+            if isinstance(content, list):
+                for item in content:
+                    if hasattr(item, 'type') and item.type == "image_url":
+                        if hasattr(item, 'image_url') and item.image_url and item.image_url.url:
+                            logger.debug(f"Detected vision request with image: {item.image_url.url[:30]}...")
+                            return True
+        
+        logger.debug(f"No images detected, treating as text-only request")
+        return False
     
     def fix_messages(self) -> None:
         """
@@ -108,118 +174,108 @@ class ChatCompletionRequest(BaseModel):
         if system_messages:
             self.messages = [system_messages[0]] + non_system_messages
         else:
-            self.messages = non_system_messages
-    
-    def is_vision_request(self) -> bool:
-        """
-        Check if the request includes image content, indicating a vision-based request.
-        If so, switch the model to the vision model.
-        """
-        # Check if messages is empty first
-        if not self.messages:
-            return False
-            
-        # Optimization: Check only the last user message first
-        last_message = self.messages[-1]
-        if last_message.get("role") == "user" and self._check_message_for_image(last_message):
-            return True
-        
-        # Fall back to checking all messages
-        for message in self.messages:
-            if message.get("role") == "user" and self._check_message_for_image(message):
-                return True
-                
-        return False
-    
-    def _check_message_for_image(self, message: Dict[str, Any]) -> bool:
-        """Helper method to check if a message contains an image."""
-        content = message.get("content")
-        if not isinstance(content, list):
-            return False
-            
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "image_url":
-                self.model = Config.VISION_MODEL    
-                return True
-        return False
+            self.messages = non_system_messages 
+
+
+# Non-streaming request and response
+class ChatCompletionRequest(ChatCompletionRequestBase):
+    """
+    Model for non-streaming chat completion requests.
+    """
+    stream: bool = False
+    enable_thinking: bool = True
+
+class Choice(BaseModel):
+    """
+    Represents a choice in a chat completion response.
+    """
+    finish_reason: Literal["stop", "length", "tool_calls", "content_filter", "function_call"]
+    index: int
+    message: Message
 
 class ChatCompletionResponse(BaseModel):
-    """Model for chat completion responses following OpenAI's schema."""
+    """
+    Represents a complete chat completion response.
+    """
     id: str
-    object: str = "chat.completion"
+    object: Literal["chat.completion"]
     created: int
     model: str
-    usage: Dict[str, int]
-    choices: Any
+    choices: List[Choice]
 
-    @classmethod
-    def create_from_dict(cls, data: Dict[str, Any], model: str):
-        """Create a standard response from dictionary data."""
-        timestamp = int(time.time())
-        choices = data.get("choices", [])
-            
-        return cls(
-            id=data.get("id", f"chatcmpl-{timestamp}{random.randint(10000, 99999)}"),
-            created=data.get("created", timestamp),
-            model=model,
-            choices=choices,
-            usage=data.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
-        )
+
+# Streaming request and response
+class StreamChatCompletionRequest(ChatCompletionRequestBase):
+    """
+    Model for streaming chat completion requests.
+    """
+    stream: bool = True
+
+class ChoiceDeltaFunctionCall(BaseModel):
+    """
+    Represents a function call delta in a streaming response.
+    """
+    arguments: Optional[str] = None
+    name: Optional[str] = None
+
+class ChoiceDeltaToolCall(BaseModel):
+    """
+    Represents a tool call delta in a streaming response.
+    """
+    index: Optional[int] = None
+    id: Optional[str] = None
+    function: Optional[ChoiceDeltaFunctionCall] = None
+    type: Optional[str] = None
+
+class Delta(BaseModel):
+    """
+    Represents a delta in a streaming response.
+    """
+    content: Optional[str] = None
+    function_call: Optional[ChoiceDeltaFunctionCall] = None
+    refusal: Optional[str] = None
+    role: Optional[Literal["system", "user", "assistant", "tool"]] = None
+    tool_calls: Optional[List[ChoiceDeltaToolCall]] = None
+
+class StreamingChoice(BaseModel):
+    """
+    Represents a choice in a streaming response.
+    """
+    delta: Delta
+    finish_reason: Optional[Literal["stop", "length", "tool_calls", "content_filter", "function_call"]] = None
+    index: int
+    
+class ChatCompletionChunk(BaseModel):
+    """
+    Represents a chunk in a streaming chat completion response.
+    """
+    id: str
+    choices: List[StreamingChoice]
+    created: int
+    model: str
+    object: Literal["chat.completion.chunk"]
 
 # Embedding models
 class EmbeddingRequest(BaseModel):
     """
     Model for embedding requests.
     """
-    model: str = Config.EMBEDDING_MODEL     # Model to use, defaults to embedding model
-    input: Union[str, List[str]] = Field(..., description="Text input(s) for embedding")  # Text inputs to embed
-    encoding_format: Optional[str] = "float"  # The format of the output data
-    
-    @validator("input")
-    def check_input_not_empty(cls, v):
-        """Ensure the input is not empty."""
-        if isinstance(v, list) and not v:
-            raise ValueError("input list cannot be empty")
-        if isinstance(v, str) and not v.strip():
-            raise ValueError("input string cannot be empty")
-        return v
+    model: str = Config.EMBEDDING_MODEL
+    input: List[str] = Field(..., description="List of text inputs for embedding")
+    image_url: Optional[str] = Field(default=None, description="Image URL to embed")
 
-class EmbeddingResponseData(BaseModel):
-    """Model for a single embedding in a response."""
-    object: str = "embedding"
-    embedding: List[float]
-    index: int
+class Embedding(BaseModel):
+    """
+    Represents an embedding object in an embedding response.
+    """
+    embedding: List[float] = Field(..., description="The embedding vector")
+    index: int = Field(..., description="The index of the embedding in the list")
+    object: str = Field(default="embedding", description="The object type")
 
 class EmbeddingResponse(BaseModel):
-    """Model for embedding responses following OpenAI's schema."""
+    """
+    Represents an embedding response.
+    """
     object: str = "list"
-    data: List[EmbeddingResponseData]
+    data: List[Embedding]
     model: str
-    usage: Dict[str, int]
-    
-    # Default empty usage dict
-    DEFAULT_USAGE: ClassVar[Dict[str, int]] = {"prompt_tokens": 0, "total_tokens": 0}
-
-    @classmethod
-    def create_from_embeddings(cls, embeddings: List[List[float]], model: str, input_texts: List[str]):
-        """Create a standard response from a list of embeddings."""
-        data = [
-            EmbeddingResponseData(embedding=embedding, index=i)
-            for i, embedding in enumerate(embeddings)
-            if i < len(input_texts)  # Guard against index errors
-        ]
-                
-        return cls(
-            data=data,
-            model=model,
-            usage=cls.DEFAULT_USAGE
-        )
-
-    @classmethod
-    def create_from_single_embedding(cls, embedding: List[float], model: str, usage: Optional[Dict[str, int]] = None):
-        """Create a standard response from a single embedding."""
-        return cls(
-            data=[EmbeddingResponseData(embedding=embedding, index=0)],
-            model=model,
-            usage=usage or cls.DEFAULT_USAGE
-        ) 
