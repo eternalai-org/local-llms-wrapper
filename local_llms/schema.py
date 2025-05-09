@@ -119,13 +119,11 @@ class ChatCompletionRequestBase(BaseModel):
         logger = logging.getLogger(__name__)
         
         for message in self.messages:
-            content = message.content
-            if isinstance(content, list):
-                for item in content:
-                    if hasattr(item, 'type') and item.type == "image_url":
-                        if hasattr(item, 'image_url') and item.image_url and item.image_url.url:
-                            logger.debug(f"Detected vision request with image: {item.image_url.url[:30]}...")
-                            return True
+            if isinstance(message.content, list):
+                for item in message.content:
+                    if item.type == "image_url":
+                        logger.debug(f"Detected vision request with image: {item.image_url.url[:30]}...")
+                        return True
         
         logger.debug(f"No images detected, treating as text-only request")
         return False
@@ -136,9 +134,6 @@ class ChatCompletionRequestBase(BaseModel):
         Also replaces null values with empty strings and cleans special box text.
         """
         def clean_special_box_text(input_text):
-            if not isinstance(input_text, str):
-                return ""
-            # Apply all regex substitutions in one pass
             text = UNICODE_BOX_PATTERN.sub('', input_text)
             return text.strip()
         
@@ -174,8 +169,7 @@ class ChatCompletionRequestBase(BaseModel):
         if system_messages:
             self.messages = [system_messages[0]] + non_system_messages
         else:
-            self.messages = non_system_messages 
-
+            self.messages = non_system_messages
 
 # Non-streaming request and response
 class ChatCompletionRequest(ChatCompletionRequestBase):
@@ -202,58 +196,6 @@ class ChatCompletionResponse(BaseModel):
     created: int
     model: str
     choices: List[Choice]
-
-
-# Streaming request and response
-class StreamChatCompletionRequest(ChatCompletionRequestBase):
-    """
-    Model for streaming chat completion requests.
-    """
-    stream: bool = True
-
-class ChoiceDeltaFunctionCall(BaseModel):
-    """
-    Represents a function call delta in a streaming response.
-    """
-    arguments: Optional[str] = None
-    name: Optional[str] = None
-
-class ChoiceDeltaToolCall(BaseModel):
-    """
-    Represents a tool call delta in a streaming response.
-    """
-    index: Optional[int] = None
-    id: Optional[str] = None
-    function: Optional[ChoiceDeltaFunctionCall] = None
-    type: Optional[str] = None
-
-class Delta(BaseModel):
-    """
-    Represents a delta in a streaming response.
-    """
-    content: Optional[str] = None
-    function_call: Optional[ChoiceDeltaFunctionCall] = None
-    refusal: Optional[str] = None
-    role: Optional[Literal["system", "user", "assistant", "tool"]] = None
-    tool_calls: Optional[List[ChoiceDeltaToolCall]] = None
-
-class StreamingChoice(BaseModel):
-    """
-    Represents a choice in a streaming response.
-    """
-    delta: Delta
-    finish_reason: Optional[Literal["stop", "length", "tool_calls", "content_filter", "function_call"]] = None
-    index: int
-    
-class ChatCompletionChunk(BaseModel):
-    """
-    Represents a chunk in a streaming chat completion response.
-    """
-    id: str
-    choices: List[StreamingChoice]
-    created: int
-    model: str
-    object: Literal["chat.completion.chunk"]
 
 # Embedding models
 class EmbeddingRequest(BaseModel):

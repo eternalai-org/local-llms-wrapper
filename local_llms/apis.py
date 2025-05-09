@@ -21,12 +21,10 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from functools import lru_cache
-import re
 
 # Import schemas from schema.py
 from local_llms.schema import (
-    Config, 
-    ChatCompletionRequest, 
+    ChatCompletionRequest,
     ChatCompletionResponse,
     EmbeddingRequest,
     EmbeddingResponse
@@ -42,6 +40,9 @@ app = FastAPI()
 IDLE_TIMEOUT = 600  # 10 minutes in seconds
 UNLOAD_CHECK_INTERVAL = 60  # Check every 60 seconds
 SERVICE_START_TIMEOUT = 60  # Maximum time to wait for service to start
+POOL_CONNECTIONS = 100 # Maximum number of connections in the pool
+POOL_KEEPALIVE = 20 # Keep connections alive for 20 seconds
+HTTP_TIMEOUT = 600.0  # Default timeout for HTTP requests in seconds
 
 # Cache for service port to avoid repeated lookups
 @lru_cache(maxsize=1)
@@ -242,9 +243,13 @@ class ServiceHandler:
         # Make a non-streaming API call
         response_data = await ServiceHandler._make_api_call(port, "/v1/chat/completions", request_dict)
         assert isinstance(response_data, dict), "Response data must be a dictionary"
-        response = ChatCompletionResponse.create_from_dict(response_data, request.model)
-        return response.model_dump() if hasattr(response, "model_dump") else response.dict()
-
+        return ChatCompletionResponse(
+            id=response_data.get("id", f"chatcmpl-{uuid.uuid4().hex}"),
+            object=response_data.get("object", "chat.completion"),
+            created=response_data.get("created", int(time.time())),
+            model=request.model,
+            choices=response_data.get("choices", [])
+        )
     @staticmethod
     async def generate_vision_response(request: ChatCompletionRequest):
         """
@@ -315,7 +320,6 @@ class ServiceHandler:
         
             content = stdout.decode().strip()
         
-        
             start_pattern = content.find(pattern)
             start_content = content.find("\n", start_pattern)
             content = content[start_content:].strip()
@@ -364,29 +368,12 @@ class ServiceHandler:
         # Convert to dict, supporting both Pydantic v1 and v2
         request_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
         response_data = await ServiceHandler._make_api_call(port, "/v1/embeddings", request_dict)
-        
-        # Handle if the response is already in the OpenAI format
-        if isinstance(response_data, dict) and "data" in response_data and "object" in response_data:
-            return response_data
-        
-        # Handle when the response is a raw list of embeddings or a single embedding
-        if isinstance(response_data, list):
-            # List of embeddings
-            input_texts = request.input if isinstance(request.input, list) else [request.input]
-            response = EmbeddingResponse.create_from_embeddings(response_data, request.model, input_texts)
-            return response.model_dump() if hasattr(response, "model_dump") else response.dict()
-            
-        elif isinstance(response_data, dict) and "embedding" in response_data:
-            # Single embedding in a dict
-            response = EmbeddingResponse.create_from_single_embedding(
-                response_data["embedding"], 
-                request.model, 
-                response_data.get("usage")
-            )
-            return response.model_dump() if hasattr(response, "model_dump") else response.dict()
-        else:
-            # Unexpected format, return as is
-            return response_data
+        assert isinstance(response_data, dict), "Response data must be a dictionary"
+        return EmbeddingResponse(
+            object=response_data.get("object", "list"),
+            data=response_data.get("data", []),
+            model=request.model
+        )
     
     @staticmethod
     async def _make_api_call(port: int, endpoint: str, data: dict) -> dict:
@@ -399,7 +386,7 @@ class ServiceHandler:
             response = await app.state.client.post(
                 f"http://localhost:{port}{endpoint}", 
                 json=data,
-                timeout=Config.HTTP_TIMEOUT
+                timeout=HTTP_TIMEOUT
             )
             logger.info(f"Received response with status code: {response.status_code}")
             
@@ -726,10 +713,10 @@ async def startup_event():
     """
     # Create an asynchronous HTTP client with connection pooling
     limits = httpx.Limits(
-        max_connections=Config.POOL_CONNECTIONS,
-        max_keepalive_connections=Config.POOL_CONNECTIONS
+        max_connections=POOL_CONNECTIONS,
+        max_keepalive_connections=POOL_CONNECTIONS
     )
-    app.state.client = httpx.AsyncClient(limits=limits, timeout=Config.HTTP_TIMEOUT)
+    app.state.client = httpx.AsyncClient(limits=limits, timeout=HTTP_TIMEOUT)
     
     # Initialize the last request time
     app.state.last_request_time = time.time()
