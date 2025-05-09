@@ -24,6 +24,8 @@ from functools import lru_cache
 
 # Import schemas from schema.py
 from local_llms.schema import (
+    Choice,
+    Message,
     ChatCompletionRequest,
     ChatCompletionResponse,
     EmbeddingRequest,
@@ -250,6 +252,7 @@ class ServiceHandler:
             model=request.model,
             choices=response_data.get("choices", [])
         )
+
     @staticmethod
     async def generate_vision_response(request: ChatCompletionRequest):
         """
@@ -324,8 +327,22 @@ class ServiceHandler:
             start_content = content.find("\n", start_pattern)
             content = content[start_content:].strip()
             # Create formatted response
-            response = ChatCompletionResponse.create_from_content(content, request.model)
-            return response.model_dump() if hasattr(response, "model_dump") else response.dict()
+            return ChatCompletionResponse(
+                id=f"chatcmpl-{uuid.uuid4().hex}",
+                object="chat.completion",
+                created=int(time.time()),
+                model=request.model,
+                choices = [
+                    Choice(
+                        index=0,
+                        message=Message(
+                            role="assistant",
+                            content=content
+                        ),
+                        finish_reason="stop"
+                    )
+                ]
+            )
             
         except HTTPException:
             raise

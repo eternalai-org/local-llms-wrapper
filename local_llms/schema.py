@@ -71,21 +71,12 @@ class Message(BaseModel):
     """
     Represents a message in a chat completion.
     """
-    content: Union[str, List[VisionContentItem]] = Field(..., description="Message content")
+    content: Union[str, List[VisionContentItem]] = Field(None, description="Message content")
     refusal: Optional[str] = Field(None, description="Refusal message if any")
     role: Literal["system", "user", "assistant", "tool"] = Field(..., description="Role of the message sender")
     function_call: Optional[FunctionCall] = Field(None, description="Function call if any")
     tool_calls: Optional[List[ChatCompletionMessageToolCall]] = Field(None, description="Tool calls if any")
-
-    @validator("content")
-    def validate_content(cls, v: Union[str, List[VisionContentItem]]) -> Union[str, List[VisionContentItem]]:
-        """Validate content based on type."""
-        if isinstance(v, str) and not v.strip():
-            raise ValueError("Content cannot be empty")
-        elif isinstance(v, list) and not v:
-            raise ValueError("Content list cannot be empty")
-        return v
-
+    
 # Common request base for both streaming and non-streaming
 class ChatCompletionRequestBase(BaseModel):
     """
