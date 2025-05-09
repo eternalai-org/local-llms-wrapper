@@ -2,11 +2,9 @@
 Schema definitions for API requests and responses following OpenAI's API standard.
 """
 
-import time
 import re
-import random
 from typing_extensions import Literal
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, root_validator
 from typing import List, Dict, Optional, Union, Any, ClassVar
 
 # Precompile regex patterns for better performance
@@ -26,75 +24,106 @@ class ImageUrl(BaseModel):
     """
     Represents an image URL in a message.
     """
-    url: str
+    url: str = Field(..., description="URL of the image")
+
+    @validator("url")
+    def validate_url(cls, v: str) -> str:
+        """Validate that the URL is properly formatted."""
+        if not v.startswith(("http://", "https://", "data:")):
+            raise ValueError("URL must start with http://, https://, or data:")
+        return v
 
 class VisionContentItem(BaseModel):
     """
     Represents a single content item in a message (text or image).
     """
-    type: str
-    text: Optional[str] = None
-    image_url: Optional[ImageUrl] = None
+    type: Literal["text", "image_url"] = Field(..., description="Type of content")
+    text: Optional[str] = Field(None, description="Text content if type is text")
+    image_url: Optional[ImageUrl] = Field(None, description="Image URL if type is image_url")
+
+    @root_validator
+    def validate_content(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate that the content matches the type."""
+        content_type = values.get("type")
+        if content_type == "text" and not values.get("text"):
+            raise ValueError("Text content is required for type 'text'")
+        elif content_type == "image_url" and not values.get("image_url"):
+            raise ValueError("Image URL is required for type 'image_url'")
+        return values
 
 class FunctionCall(BaseModel):
     """
     Represents a function call in a message.
     """
-    arguments: str
-    name: str
+    arguments: str = Field(..., description="JSON string of function arguments")
+    name: str = Field(..., description="Name of the function to call")
+
+    @validator("arguments")
+    def validate_arguments(cls, v: str) -> str:
+        """Validate that arguments is a valid JSON string."""
+        try:
+            import json
+            json.loads(v)
+            return v
+        except json.JSONDecodeError:
+            raise ValueError("arguments must be a valid JSON string")
 
 class ChatCompletionMessageToolCall(BaseModel):
     """
     Represents a tool call in a message.
     """
-    id: str
-    function: FunctionCall
-    type: Literal["function"]
+    id: str = Field(..., description="Unique identifier for the tool call")
+    function: FunctionCall = Field(..., description="Function call details")
+    type: Literal["function"] = Field("function", description="Type of tool call")
 
 class Message(BaseModel):
     """
     Represents a message in a chat completion.
     """
-    content: Union[str, List[VisionContentItem]]
-    refusal: Optional[str] = None
-    role: Literal["system", "user", "assistant", "tool"]
-    function_call: Optional[FunctionCall] = None
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+    content: Union[str, List[VisionContentItem]] = Field(..., description="Message content")
+    refusal: Optional[str] = Field(None, description="Refusal message if any")
+    role: Literal["system", "user", "assistant", "tool"] = Field(..., description="Role of the message sender")
+    function_call: Optional[FunctionCall] = Field(None, description="Function call if any")
+    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = Field(None, description="Tool calls if any")
+
+    @validator("content")
+    def validate_content(cls, v: Union[str, List[VisionContentItem]]) -> Union[str, List[VisionContentItem]]:
+        """Validate content based on type."""
+        if isinstance(v, str) and not v.strip():
+            raise ValueError("Content cannot be empty")
+        elif isinstance(v, list) and not v:
+            raise ValueError("Content list cannot be empty")
+        return v
 
 # Common request base for both streaming and non-streaming
 class ChatCompletionRequestBase(BaseModel):
     """
     Base model for chat completion requests.
     """
-    model: str = Config.TEXT_MODEL
-    messages: List[Message]
-    tools: Optional[List[Dict[str, Any]]] = None
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = 0.7
-    top_p: Optional[float] = 1.0
-    frequency_penalty: Optional[float] = 0.0
-    presence_penalty: Optional[float] = 0.0
-    stop: Optional[List[str]] = None
-    n: Optional[int] = 1
-    response_format: Optional[Dict[str, str]] = None
-    seed: Optional[int] = None
-    user: Optional[str] = None
-    enable_thinking: Optional[bool] = False
+    model: str = Field(Config.TEXT_MODEL, description="Model to use for completion")
+    messages: List[Message] = Field(..., description="List of messages in the conversation")
+    tools: Optional[List[Dict[str, Any]]] = Field(None, description="Available tools for the model")
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = Field(None, description="Tool choice configuration")
+    max_tokens: Optional[int] = Field(None, ge=1, description="Maximum number of tokens to generate")
+    temperature: Optional[float] = Field(0.7, ge=0, le=2, description="Sampling temperature")
+    top_p: Optional[float] = Field(1.0, ge=0, le=1, description="Nucleus sampling parameter")
+    # frequency_penalty: Optional[float] = Field(0.0, ge=-2, le=2, description="Frequency penalty")
+    # presence_penalty: Optional[float] = Field(0.0, ge=-2, le=2, description="Presence penalty")
+    # stop: Optional[List[str]] = Field(None, description="Stop sequences")
+    # n: Optional[int] = Field(1, ge=1, description="Number of completions to generate")
+    # response_format: Optional[Dict[str, str]] = Field(None, description="Response format configuration")
+    seed: Optional[int] = Field(None, description="Random seed for generation")
+    # user: Optional[str] = Field(None, description="User identifier")
 
     @validator("messages")
-    def check_messages_not_empty(cls, v):
-        """
-        Ensure that the messages list is not empty and validate message structure.
-        """
+    def check_messages_not_empty(cls, v: List[Message]) -> List[Message]:
+        """Ensure that the messages list is not empty and validate message structure."""
         if not v:
             raise ValueError("messages cannot be empty")
         
-        # Validate message history length
         if len(v) > 100:  # OpenAI's limit is typically around 100 messages
             raise ValueError("message history too long")
             
-        # Validate message roles
         valid_roles = {"user", "assistant", "system", "tool"}
         for msg in v:
             if msg.role not in valid_roles:
@@ -102,19 +131,8 @@ class ChatCompletionRequestBase(BaseModel):
                 
         return v
 
-    @validator("temperature")
-    def check_temperature(cls, v):
-        """
-        Validate temperature is between 0 and 2.
-        """
-        if v is not None and (v < 0 or v > 2):
-            raise ValueError("temperature must be between 0 and 2")
-        return v
-
     def is_vision_request(self) -> bool:
-        """
-        Check if the request includes image content, indicating a vision-based request.
-        """
+        """Check if the request includes image content, indicating a vision-based request."""
         import logging
         logger = logging.getLogger(__name__)
         
@@ -125,99 +143,97 @@ class ChatCompletionRequestBase(BaseModel):
                         logger.debug(f"Detected vision request with image: {item.image_url.url[:30]}...")
                         return True
         
-        logger.debug(f"No images detected, treating as text-only request")
+        logger.debug("No images detected, treating as text-only request")
         return False
-    
-    def fix_messages(self) -> None:
-        """
-        Fix the messages list to ensure it starts with a system message if it exists.
-        Also replaces null values with empty strings and cleans special box text.
-        """
-        def clean_special_box_text(input_text):
-            text = UNICODE_BOX_PATTERN.sub('', input_text)
-            return text.strip()
-        
-        # Process all messages at once
-        system_messages = []
-        non_system_messages = []
-        
-        for message in self.messages:
-            # Replace null values with empty strings
-            for key in message:
-                if message[key] is None:
-                    message[key] = ""
-            
-            # Clean content
-            content = message.get("content")
-            if isinstance(content, str):
-                message["content"] = clean_special_box_text(content)
-            elif isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        item["text"] = clean_special_box_text(item.get("text", ""))
-            
-            # Sort messages by role
-            if message.get("role") == "system":
-                system_messages.append(message)
-            else:
-                non_system_messages.append(message)
-        if not self.enable_thinking:
-            final_message = non_system_messages[-1]
-            final_message["content"] = final_message["content"] + " /no_think"
-            non_system_messages[-1] = final_message
-        # Reorder messages to ensure system message comes first if it exists
-        if system_messages:
-            self.messages = [system_messages[0]] + non_system_messages
-        else:
-            self.messages = non_system_messages
 
 # Non-streaming request and response
 class ChatCompletionRequest(ChatCompletionRequestBase):
     """
     Model for non-streaming chat completion requests.
     """
-    stream: bool = False
-    enable_thinking: bool = True
+    stream: bool = Field(False, description="Whether to stream the response")
+    enable_thinking: bool = Field(False, description="Whether to enable thinking mode")
+
+    def fix_messages(self) -> None:
+        """Fix the messages list to ensure proper formatting and ordering."""
+        def clean_special_box_text(input_text: str) -> str:
+            return UNICODE_BOX_PATTERN.sub('', input_text).strip()
+        
+        # Clean message contents
+        for message in self.messages:
+            if message.content is None:
+                message.content = ""
+            elif isinstance(message.content, str):
+                message.content = clean_special_box_text(message.content)
+            elif isinstance(message.content, list):
+                for item in message.content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        item["text"] = clean_special_box_text(item.get("text", ""))
+        
+        # Sort messages by role
+        system_messages = []
+        non_system_messages = []
+        
+        for message in self.messages:
+            if message.role == "system":
+                system_messages.append(message)
+            else:
+                non_system_messages.append(message)
+        
+        if not self.enable_thinking and non_system_messages:
+            final_message = non_system_messages[-1]
+            assert final_message.role == "user", "Last message must be from user when disabling thinking"
+            final_message.content = final_message.content + " /no_think"
+            non_system_messages[-1] = final_message
+            
+        self.messages = system_messages + non_system_messages
 
 class Choice(BaseModel):
     """
     Represents a choice in a chat completion response.
     """
-    finish_reason: Literal["stop", "length", "tool_calls", "content_filter", "function_call"]
-    index: int
-    message: Message
+    finish_reason: Literal["stop", "length", "tool_calls", "content_filter", "function_call"] = Field(..., description="Reason for completion")
+    index: int = Field(..., ge=0, description="Index of the choice")
+    message: Message = Field(..., description="Generated message")
 
 class ChatCompletionResponse(BaseModel):
     """
     Represents a complete chat completion response.
     """
-    id: str
-    object: Literal["chat.completion"]
-    created: int
-    model: str
-    choices: List[Choice]
+    id: str = Field(..., description="Unique identifier for the completion")
+    object: Literal["chat.completion"] = Field("chat.completion", description="Object type")
+    created: int = Field(..., description="Unix timestamp of creation")
+    model: str = Field(..., description="Model used for completion")
+    choices: List[Choice] = Field(..., description="Generated choices")
 
 # Embedding models
 class EmbeddingRequest(BaseModel):
     """
     Model for embedding requests.
     """
-    model: str = Config.EMBEDDING_MODEL
-    input: List[str] = Field(..., description="List of text inputs for embedding")
-    image_url: Optional[str] = Field(default=None, description="Image URL to embed")
+    model: str = Field(Config.EMBEDDING_MODEL, description="Model to use for embedding")
+    input: List[str] = Field(..., min_items=1, description="List of text inputs for embedding")
+    image_url: Optional[str] = Field(None, description="Image URL to embed")
+
+    @validator("input")
+    def validate_input(cls, v: List[str]) -> List[str]:
+        """Validate that input texts are not empty."""
+        if not all(text.strip() for text in v):
+            raise ValueError("Input texts cannot be empty")
+        return v
 
 class Embedding(BaseModel):
     """
     Represents an embedding object in an embedding response.
     """
     embedding: List[float] = Field(..., description="The embedding vector")
-    index: int = Field(..., description="The index of the embedding in the list")
-    object: str = Field(default="embedding", description="The object type")
+    index: int = Field(..., ge=0, description="The index of the embedding in the list")
+    object: str = Field("embedding", description="The object type")
 
 class EmbeddingResponse(BaseModel):
     """
     Represents an embedding response.
     """
-    object: str = "list"
-    data: List[Embedding]
-    model: str
+    object: str = Field("list", description="Object type")
+    data: List[Embedding] = Field(..., description="List of embeddings")
+    model: str = Field(..., description="Model used for embedding")
