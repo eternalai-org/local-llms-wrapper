@@ -71,7 +71,7 @@ class Message(BaseModel):
     """
     Represents a message in a chat completion.
     """
-    content: Union[str, List[VisionContentItem]] = Field(None, description="Message content")
+    content: Optional[Union[str, List[VisionContentItem]]] = Field(None, description="Message content")
     refusal: Optional[str] = Field(None, description="Refusal message if any")
     role: Literal["system", "user", "assistant", "tool"] = Field(..., description="Role of the message sender")
     function_call: Optional[FunctionCall] = Field(None, description="Function call if any")
